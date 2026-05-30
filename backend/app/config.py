@@ -13,8 +13,9 @@ class DatabaseSettings(BaseModel):
     password: str
 
     def url(self) -> str:
+        host = os.getenv("DB_HOST", self.host)
         pw = os.getenv("POSTGRES_PASSWORD", self.password)
-        return f"postgresql+psycopg://{self.user}:{pw}@{self.host}:{self.port}/{self.name}"
+        return f"postgresql+psycopg://{self.user}:{pw}@{host}:{self.port}/{self.name}"
 
 
 class RedisSettings(BaseModel):
