@@ -16,11 +16,11 @@ def troubleshoot_symptom(symptom: str, appliance_type: str, brand: str | None = 
     with engine.connect() as conn:
         repair_rows = conn.execute(text("""
             SELECT r.symptom, r.part_name, r.content,
-                   1 - (e.embedding <=> :vec::vector) AS score
+                   1 - (e.embedding <=> CAST(:vec AS vector)) AS score
             FROM embeddings e
             JOIN repair_guides r ON e.source_id = r.id::text AND e.source_type = 'repair'
             WHERE r.appliance = :appliance
-            ORDER BY e.embedding <=> :vec::vector
+            ORDER BY e.embedding <=> CAST(:vec AS vector)
             LIMIT :k
         """), {"vec": vec_str, "appliance": appliance_type.lower(), "k": top_k}).mappings().all()
 
