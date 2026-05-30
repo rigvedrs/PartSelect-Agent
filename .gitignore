@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+.env
+backend/data/raw/*.jsonl
+backend/postgres_db/
+node_modules/
+.DS_Store
+*.egg-info/
+.pytest_cache/

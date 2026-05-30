@@ -1,0 +1,12 @@
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+sqlalchemy==2.0.36
+psycopg[binary]==3.2.3
+pgvector==0.3.6
+redis==5.2.0
+sentence-transformers==3.3.1
+pydantic==2.10.3
+tomli==2.2.1
+firecrawl-py==1.6.8
+python-dotenv==1.0.1
+pytest==8.3.4
