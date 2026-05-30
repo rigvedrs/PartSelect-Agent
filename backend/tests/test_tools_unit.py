@@ -107,3 +107,25 @@ def test_add_to_cart_success():
         result = add_to_cart("session-1", "PS11752778")
     assert result["success"] is True
     assert result["cart_total"] == 47.40
+
+
+def test_search_parts_fallback_not_called_when_db_has_result():
+    """When the DB has the part, Firecrawl should never be called."""
+    from app.agent.tools.search_parts import search_parts
+    mock_part = {"ps_number": "PS11752778", "name": "Refrigerator Door Shelf Bin",
+                 "price": 47.40, "category": "refrigerator"}
+    mock_engine = MagicMock()
+    mock_engine.connect.return_value = make_mock_conn(rows=[mock_part])
+    with patch("app.agent.tools.search_parts.get_engine", return_value=mock_engine), \
+         patch("app.agent.tools.search_parts._firecrawl_fallback") as mock_fc:
+        results = search_parts("PS11752778")
+    mock_fc.assert_not_called()
+    assert len(results) == 1
+
+
+def test_search_parts_fallback_returns_empty_without_api_key(monkeypatch):
+    """Fallback returns [] gracefully when FIRECRAWL_API_KEY is absent."""
+    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+    from app.agent.tools.search_parts import _firecrawl_fallback
+    result = _firecrawl_fallback("PS99999999")
+    assert result == []

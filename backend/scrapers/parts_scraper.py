@@ -49,5 +49,20 @@ def main(ps_numbers: list[str]):
     print(f"wrote {len(records)} records -> {OUT}")
 
 
+def scrape_and_parse(ps_number: str) -> dict | None:
+    """Scrape PartSelect product page for a PS number and return parsed raw dict.
+    Returns None if scrape fails or page not found."""
+    ps = ps_number.upper()
+    if not ps.startswith("PS"):
+        ps = f"PS{ps}"
+    try:
+        md = scrape_markdown(URL_TMPL.format(ps=ps))
+        if not md:
+            return None
+        return parse_product(ps, md)
+    except Exception:
+        return None
+
+
 if __name__ == "__main__":
     main(sys.argv[1:] or ["PS11752778"])
