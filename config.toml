@@ -1,0 +1,40 @@
+[database]
+host = "postgres"
+port = 5432
+name = "partselect"
+user = "partselect"
+password = "partselect"
+
+[redis]
+host = "redis"
+port = 6379
+db = 0
+
+[llm]
+provider = "openrouter"
+base_url = "https://openrouter.ai/api/v1"
+tool_model = "deepseek/deepseek-chat"
+synthesis_model = "deepseek/deepseek-chat"
+tool_temperature = 0.0
+synthesis_temperature = 0.3
+
+[embeddings]
+model = "sentence-transformers/all-MiniLM-L6-v2"
+dim = 384
+
+[retrieval]
+top_k = 5
+hnsw_m = 16
+hnsw_ef_construction = 64
+
+[agent]
+max_tool_iterations = 4
+
+[cache]
+product_ttl_seconds = 86400
+compatibility_ttl_seconds = 86400
+retrieval_ttl_seconds = 3600
+
+[scope]
+appliance_keywords = ["refrigerator", "fridge", "freezer", "ice maker", "icemaker", "dishwasher", "dish washer", "part", "model", "compatible", "install", "leak", "drain"]
+out_of_scope_keywords = ["recipe", "weather", "stock price", "python", "javascript", "poem", "joke", "movie", "sports"]
