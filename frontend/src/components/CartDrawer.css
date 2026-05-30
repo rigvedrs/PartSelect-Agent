@@ -1,0 +1,16 @@
+.cart-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.4); z-index: 999;
+  display: flex; justify-content: flex-end;
+}
+.cart-drawer {
+  width: 320px; background: #fff; height: 100%;
+  display: flex; flex-direction: column; box-shadow: -4px 0 20px rgba(0,0,0,0.15);
+}
+.cart-drawer-header {
+  padding: 16px; background: var(--partselect-teal); color: #fff;
+  display: flex; justify-content: space-between; align-items: center; font-weight: 700;
+}
+.cart-items { flex: 1; overflow-y: auto; padding: 12px; }
+.cart-item { display: flex; justify-content: space-between; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--partselect-border); font-size: 0.85rem; }
+.cart-footer { padding: 16px; border-top: 1px solid var(--partselect-border); }
+.cart-total { font-weight: 700; font-size: 1rem; margin-bottom: 8px; }

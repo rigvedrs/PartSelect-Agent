@@ -1,0 +1,27 @@
+@import './globals.css';
+
+.app-page {
+  min-height: 100vh;
+  background: var(--partselect-gray);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.app-hero {
+  text-align: center;
+  color: var(--partselect-text);
+}
+
+.app-hero h1 {
+  color: var(--partselect-teal);
+  font-size: 2rem;
+  margin: 0 0 8px;
+}
+
+.app-hero p {
+  color: #555;
+  font-size: 1rem;
+}

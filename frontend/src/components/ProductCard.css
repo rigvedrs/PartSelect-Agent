@@ -1,0 +1,28 @@
+.product-card {
+  border: 1px solid var(--partselect-border);
+  border-radius: var(--border-radius);
+  padding: 12px;
+  background: #fff;
+  margin: 6px 0;
+  max-width: 280px;
+}
+.product-card img {
+  width: 100%;
+  max-height: 120px;
+  object-fit: contain;
+  border-radius: 6px;
+  background: var(--partselect-gray);
+}
+.product-card .part-name { font-weight: 600; font-size: 0.9rem; margin: 6px 0 2px; }
+.product-card .part-meta { font-size: 0.75rem; color: #888; }
+.product-card .part-price { font-weight: 700; color: var(--partselect-teal); font-size: 1rem; margin: 4px 0; }
+.product-card .stock-badge {
+  font-size: 0.7rem; padding: 2px 6px; border-radius: 4px;
+  background: #e8f5e9; color: #388e3c; display: inline-block; margin-bottom: 6px;
+}
+.add-to-cart-btn {
+  width: 100%; padding: 8px; background: var(--partselect-teal);
+  color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: 0.85rem; font-weight: 600;
+}
+.add-to-cart-btn:hover { background: var(--partselect-teal-dark); }
+.view-link { display: block; text-align: center; margin-top: 4px; font-size: 0.75rem; color: var(--partselect-teal); }
