@@ -66,6 +66,16 @@ CREATE TABLE IF NOT EXISTS sessions (
     updated_at TIMESTAMPTZ DEFAULT now()
 );
 
+CREATE TABLE IF NOT EXISTS session_messages (
+    id SERIAL PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(session_id) ON DELETE CASCADE,
+    role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
+    content TEXT NOT NULL,
+    created_at TIMESTAMPTZ DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_session_messages_session
+    ON session_messages(session_id, id);
+
 CREATE TABLE IF NOT EXISTS carts (
     session_id TEXT PRIMARY KEY REFERENCES sessions(session_id) ON DELETE CASCADE
 );

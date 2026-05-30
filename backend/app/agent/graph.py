@@ -91,7 +91,7 @@ async def run_agent_streaming(
     appliance_model: str | None,
     history: list,
 ) -> AsyncIterator[str]:
-    """Yield text tokens. Requires OPENROUTER_API_KEY in environment."""
+    """Yield text tokens. `history` is prior user/assistant LangChain messages for this session."""
     graph = build_graph(session_id)
     content = message
     if appliance_model:
