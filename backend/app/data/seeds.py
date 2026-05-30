@@ -32,7 +32,10 @@ SEED_PARTS = [
 ]
 
 # Compatibility pairs: (model_number, brand) for each seed PS number.
-# WDT780SAEM1 is the model from case-study example query 2.
+# WDT780SAEM1 is intentionally included: it's the exact model from case-study
+# example query 2 ("Is this part compatible with my WDT780SAEM1 model?").
+# That query must return a deterministic answer regardless of what the bulk
+# dataset contains, so it's hardcoded here.
 SEED_COMPAT = {
     "PS11752778": [
         ("WDT780SAEM1", "Whirlpool"),

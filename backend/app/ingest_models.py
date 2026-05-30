@@ -7,7 +7,7 @@ _DISHWASHER = ("dishwasher",)
 def parse_price(value) -> float | None:
     if value is None:
         return None
-    s = str(value).strip()
+    s = str(value).strip().lstrip("$")
     if not s:
         return None
     try:
@@ -16,24 +16,42 @@ def parse_price(value) -> float | None:
         return None
 
 
-def infer_category(raw: dict) -> str | None:
-    """Return 'refrigerator'|'dishwasher'|None from cross-reference descriptions."""
-    blobs = []
-    for ref in raw.get("model_cross_reference") or []:
-        blobs.append((ref.get("description") or "").lower())
-    text = " ".join(blobs)
-    if any(k in text for k in _DISHWASHER):
+def _appliance_from_text(description: str) -> str | None:
+    desc = (description or "").lower()
+    if any(k in desc for k in _DISHWASHER):
         return "dishwasher"
-    if any(k in text for k in _REFRIGERATOR):
+    if any(k in desc for k in _REFRIGERATOR):
+        return "refrigerator"
+    return None
+
+
+def infer_category(raw: dict) -> str | None:
+    """Return the primary category for a part based on its cross-reference descriptions.
+
+    When refs span both appliance types, 'dishwasher' wins so the part is
+    searchable in the dishwasher scope. Use extract_compat_rows to get
+    per-ref appliance tags for the compatibility table.
+    """
+    combined = " ".join(
+        (ref.get("description") or "").lower()
+        for ref in (raw.get("model_cross_reference") or [])
+    )
+    if any(k in combined for k in _DISHWASHER):
+        return "dishwasher"
+    if any(k in combined for k in _REFRIGERATOR):
         return "refrigerator"
     return None
 
 
 def reshape_part(raw: dict) -> dict:
+    ps = raw.get("partselect_number")
+    name = raw.get("name")
+    if not ps or not name:
+        raise ValueError(f"Part missing required fields ps_number={ps!r} name={name!r}")
     return {
-        "ps_number": raw.get("partselect_number"),
+        "ps_number": ps,
         "manufacturer_part_number": raw.get("manufacturer_part_number"),
-        "name": raw.get("name"),
+        "name": name,
         "price": parse_price(raw.get("price")),
         "stock_status": raw.get("availability"),
         "brand": raw.get("manufacturer"),
@@ -50,8 +68,12 @@ def reshape_part(raw: dict) -> dict:
 
 
 def extract_compat_rows(raw: dict) -> list[dict]:
+    """Return one compatibility row per model_cross_reference entry.
+
+    Each row gets its own appliance tag derived from that ref's description,
+    so mixed-appliance parts produce correctly tagged rows for both categories.
+    """
     ps = raw.get("partselect_number")
-    appliance = infer_category(raw)
     rows, seen = [], set()
     for ref in raw.get("model_cross_reference") or []:
         model = ref.get("model_number")
@@ -62,6 +84,6 @@ def extract_compat_rows(raw: dict) -> list[dict]:
             "ps_number": ps,
             "model_number": model,
             "brand": ref.get("brand"),
-            "appliance": appliance,
+            "appliance": _appliance_from_text(ref.get("description", "")),
         })
     return rows

@@ -50,8 +50,11 @@ def _insert_compat(conn, row: dict):
 def ingest_parts(conn) -> int:
     count = 0
     for raw in _read_jsonl(RAW_DIR / "parts.jsonl"):
-        p = reshape_part(raw)
-        if not p["ps_number"] or p["category"] is None:
+        try:
+            p = reshape_part(raw)
+        except ValueError:
+            continue
+        if p["category"] is None:
             continue
         _insert_part(conn, p)
         for row in extract_compat_rows(raw):
@@ -95,6 +98,8 @@ def ingest_repairs(conn) -> int:
         conn.execute(text("""
             INSERT INTO embeddings (source_type, source_id, content, embedding)
             VALUES ('repair', :sid, :content, :embedding)
+            ON CONFLICT (source_type, source_id) DO UPDATE SET
+                content = EXCLUDED.content, embedding = EXCLUDED.embedding
         """), {"sid": str(rid), "content": content, "embedding": str(vec)})
         count += 1
     return count
@@ -120,6 +125,8 @@ def ingest_articles(conn) -> int:
         conn.execute(text("""
             INSERT INTO embeddings (source_type, source_id, content, embedding)
             VALUES ('article', :sid, :content, :embedding)
+            ON CONFLICT (source_type, source_id) DO UPDATE SET
+                content = EXCLUDED.content, embedding = EXCLUDED.embedding
         """), {"sid": str(aid), "content": content[:2000], "embedding": str(vec)})
         count += 1
     return count

@@ -52,7 +52,8 @@ CREATE TABLE IF NOT EXISTS embeddings (
     source_type TEXT NOT NULL,
     source_id TEXT NOT NULL,
     content TEXT NOT NULL,
-    embedding vector(384)
+    embedding vector(384),
+    UNIQUE (source_type, source_id)
 );
 CREATE INDEX IF NOT EXISTS idx_embeddings_hnsw
     ON embeddings USING hnsw (embedding vector_cosine_ops)
