@@ -76,7 +76,6 @@ class Settings(BaseModel):
 
 
 def load_settings(path: str | Path | None = None) -> Settings:
-    load_dotenv()  # loads .env from cwd if present; no-op if absent
     if path is None:
         path = Path(__file__).resolve().parents[2] / "config.toml"
     with open(path, "rb") as f:
