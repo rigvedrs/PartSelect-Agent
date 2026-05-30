@@ -1,5 +1,6 @@
 import os
 import tomli
+from dotenv import load_dotenv
 from pathlib import Path
 from pydantic import BaseModel
 
@@ -25,14 +26,15 @@ class RedisSettings(BaseModel):
 class LLMSettings(BaseModel):
     provider: str
     base_url: str
+    api_key_env_var: str
     tool_model: str
     synthesis_model: str
     tool_temperature: float
     synthesis_temperature: float
 
     @property
-    def api_key(self) -> str:
-        return os.getenv("OPENROUTER_API_KEY", "")
+    def api_key(self) -> str | None:
+        return os.getenv(self.api_key_env_var) or None
 
 
 class EmbeddingSettings(BaseModel):
@@ -73,6 +75,7 @@ class Settings(BaseModel):
 
 
 def load_settings(path: str | Path | None = None) -> Settings:
+    load_dotenv()  # loads .env from cwd if present; no-op if absent
     if path is None:
         path = Path(__file__).resolve().parents[2] / "config.toml"
     with open(path, "rb") as f:
