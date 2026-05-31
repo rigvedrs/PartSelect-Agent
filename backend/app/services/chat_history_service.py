@@ -7,7 +7,7 @@ from sqlalchemy import text
 
 from app.db.engine import get_engine
 
-MAX_HISTORY_MESSAGES = 40  # cap prior turns (user + assistant pairs)
+MAX_HISTORY_MESSAGES = 12  # last ~6 turns; keeps LLM focused on recent context
 
 
 def append_message(session_id: str, role: str, content: str) -> None:

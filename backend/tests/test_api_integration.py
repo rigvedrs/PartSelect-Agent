@@ -54,17 +54,39 @@ def test_install_query(client):
 
 
 def test_compatibility_query(client):
-    """Case-study example query 2: PS11752778 + WDT780SAEM1"""
+    """PS11752778 + real ingested model (not demo seed)."""
     sid = client.post("/api/session").json()["session_id"]
     r = client.post("/api/chat", json={
         "session_id": sid,
-        "message": "Is PS11752778 compatible with my WDT780SAEM1 model?",
+        "message": "Is PS11752778 compatible with model 10640262010?",
         "stream": False,
     })
     assert r.status_code == 200
     data = r.json()
     assert "compatibility" in data
     assert data["compatibility"]["compatible"] is True
+
+
+def test_remove_from_cart_via_chat(client):
+    sid = client.post("/api/session").json()["session_id"]
+    client.post("/api/chat", json={
+        "session_id": sid, "message": "add PS11752778 to cart", "stream": False
+    })
+    r = client.post("/api/chat", json={
+        "session_id": sid, "message": "remove PS11752778 from cart", "stream": False
+    })
+    assert r.status_code == 200
+    assert "Removed" in r.json().get("text", "")
+    assert client.get(f"/api/cart/{sid}").json()["count"] == 0
+
+
+def test_greeting_does_not_assume_model(client):
+    sid = client.post("/api/session").json()["session_id"]
+    r = client.post("/api/chat", json={
+        "session_id": sid, "message": "Hi", "stream": False
+    })
+    text = (r.json().get("text") or "").lower()
+    assert "wdt780saem1" not in text
 
 
 def test_appliance_model_persisted_in_session(client):

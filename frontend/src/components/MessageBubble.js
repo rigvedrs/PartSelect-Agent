@@ -1,8 +1,10 @@
 import React from "react";
 import "./MessageBubble.css";
+import "./MessageContent.css";
 import ProductCard from "./ProductCard";
 import InstallationGuide from "./InstallationGuide";
 import CompatibilityBadge from "./CompatibilityBadge";
+import MessageContent from "./MessageContent";
 
 export default function MessageBubble({ message, onAddToCart }) {
   const { role, content, parts, installation_steps, compatibility, out_of_scope } = message;
@@ -10,7 +12,7 @@ export default function MessageBubble({ message, onAddToCart }) {
   return (
     <div className={`bubble-row ${role}`}>
       <div className={`bubble ${role}`}>
-        {content && <div>{content}</div>}
+        {content && <MessageContent content={content} />}
 
         {compatibility && <CompatibilityBadge result={compatibility} />}
 

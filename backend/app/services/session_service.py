@@ -24,6 +24,7 @@ def get_session(session_id: str) -> dict | None:
 
 
 def set_appliance_model(session_id: str, model: str | None) -> None:
+    model = (model or "").strip() or None
     engine = get_engine()
     with engine.begin() as conn:
         conn.execute(text("""

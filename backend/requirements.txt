@@ -9,4 +9,7 @@ pydantic==2.10.3
 tomli==2.2.1
 firecrawl-py==1.6.8
 python-dotenv==1.0.1
+langchain-core==0.3.29
+langchain-openai==0.2.14
+langgraph==0.2.60
 pytest==8.3.4

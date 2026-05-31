@@ -75,9 +75,22 @@ class Settings(BaseModel):
     scope: ScopeSettings
 
 
+def _default_config_path() -> Path:
+    backend_root = Path(__file__).resolve().parents[1]
+    for candidate in (
+        backend_root.parent / "config.toml",  # repo root (local dev)
+        backend_root / "config.toml",  # /app/config.toml (Docker)
+    ):
+        if candidate.is_file():
+            return candidate
+    raise FileNotFoundError(
+        f"config.toml not found; looked in {backend_root.parent} and {backend_root}"
+    )
+
+
 def load_settings(path: str | Path | None = None) -> Settings:
     if path is None:
-        path = Path(__file__).resolve().parents[2] / "config.toml"
+        path = _default_config_path()
     with open(path, "rb") as f:
         raw = tomli.load(f)
     return Settings(**raw)

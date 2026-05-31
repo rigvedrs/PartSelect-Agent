@@ -1,25 +1,33 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { sendMessage } from "../lib/api";
 
-export function useChat({ sessionId, applianceModel, onCartUpdate }) {
-  const [messages, setMessages] = useState([{
-    role: "assistant",
-    content: "Hi! I can help you find refrigerator and dishwasher parts, check compatibility, get installation instructions, and troubleshoot issues. How can I help you today?",
-  }]);
+const WELCOME = {
+  role: "assistant",
+  content: "Hi! I can help you find refrigerator and dishwasher parts, check compatibility, get installation instructions, and troubleshoot issues. How can I help you today?",
+};
+
+export function useChat({ sessionId, applianceModel, onCartUpdate, resetKey = 0, resolveSessionId }) {
+  const [messages, setMessages] = useState([WELCOME]);
   const [isLoading, setIsLoading] = useState(false);
+
+  useEffect(() => {
+    setMessages([WELCOME]);
+  }, [resetKey]);
 
   const addMessage = useCallback((msg) => {
     setMessages((prev) => [...prev, msg]);
   }, []);
 
   const send = useCallback(async (text) => {
-    if (!text.trim() || !sessionId) return;
+    if (!text.trim()) return;
+    const sid = sessionId || (resolveSessionId ? await resolveSessionId() : "");
+    if (!sid) return;
 
     addMessage({ role: "user", content: text });
     setIsLoading(true);
 
     try {
-      const res = await sendMessage({ sessionId, message: text, applianceModel, stream: false });
+      const res = await sendMessage({ sessionId: sid, message: text, applianceModel, stream: false });
       const data = await res.json();
 
       const assistantMsg = {
@@ -40,7 +48,7 @@ export function useChat({ sessionId, applianceModel, onCartUpdate }) {
     } finally {
       setIsLoading(false);
     }
-  }, [sessionId, applianceModel, addMessage, onCartUpdate]);
+  }, [sessionId, applianceModel, addMessage, onCartUpdate, resolveSessionId]);
 
   return { messages, isLoading, send };
 }

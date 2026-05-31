@@ -14,8 +14,8 @@ db = 0
 provider = "openrouter"
 base_url = "https://openrouter.ai/api/v1"
 api_key_env_var = "OPENROUTER_API_KEY"
-tool_model = "deepseek/deepseek-chat"
-synthesis_model = "deepseek/deepseek-chat"
+tool_model = "deepseek/deepseek-v4-flash"
+synthesis_model = "deepseek/deepseek-v4-pro"
 tool_temperature = 0.0
 synthesis_temperature = 0.3
 

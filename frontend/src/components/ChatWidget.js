@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect } from "react";
 import "./ChatWidget.css";
 import ChatHeader from "./ChatHeader";
 import MessageList from "./MessageList";
@@ -13,8 +13,16 @@ import { useCart } from "../hooks/useCart";
 export default function ChatWidget() {
   const [open, setOpen] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
-  const { sessionId, applianceModel, setApplianceModel } = useSession();
+  const {
+    sessionId,
+    applianceModel,
+    applianceModelForApi,
+    setApplianceModel,
+    ensureSession,
+    startNewChat,
+  } = useSession();
   const { cart, refreshCart, removeItem } = useCart(sessionId);
+  const [chatResetKey, setChatResetKey] = useState(0);
 
   const handleCartUpdate = useCallback(() => {
     refreshCart();
@@ -22,11 +30,24 @@ export default function ChatWidget() {
 
   const { messages, isLoading, send } = useChat({
     sessionId,
-    applianceModel,
+    applianceModel: applianceModelForApi,
     onCartUpdate: handleCartUpdate,
+    resetKey: chatResetKey,
+    resolveSessionId: ensureSession,
   });
 
   const [showSuggestions, setShowSuggestions] = useState(true);
+
+  useEffect(() => {
+    ensureSession();
+  }, [ensureSession]);
+
+  const handleNewChat = useCallback(async () => {
+    await startNewChat();
+    setChatResetKey((k) => k + 1);
+    setShowSuggestions(true);
+    refreshCart();
+  }, [startNewChat, refreshCart]);
 
   const handleSend = useCallback((text) => {
     setShowSuggestions(false);
@@ -49,6 +70,7 @@ export default function ChatWidget() {
         <div className="chat-panel">
           <ChatHeader
             onCartClick={() => { setCartOpen(true); refreshCart(); }}
+            onNewChat={handleNewChat}
             cartCount={cart.count}
           />
 

@@ -6,7 +6,6 @@ from sqlalchemy.engine import Engine
 from app.db.engine import get_engine, apply_schema
 from app.ingest_models import reshape_part, extract_compat_rows
 from app.rag.embedder import embed
-from app.data.seeds import SEED_PARTS, SEED_COMPAT
 
 RAW_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
 
@@ -47,6 +46,26 @@ def _insert_compat(conn, row: dict):
     """), row)
 
 
+def prune_legacy_seed_compat(conn) -> None:
+    """Remove hardcoded demo compatibility rows from earlier builds."""
+    conn.execute(text("""
+        DELETE FROM compatibility
+        WHERE ps_number = 'PS11752778' AND model_number = 'WDT780SAEM1'
+    """))
+
+
+def prune_mismatched_compat(conn) -> None:
+    """Drop rows where tagged appliance type conflicts with part category."""
+    conn.execute(text("""
+        DELETE FROM compatibility c
+        USING parts p
+        WHERE c.ps_number = p.ps_number
+          AND c.appliance IS NOT NULL
+          AND p.category IS NOT NULL
+          AND c.appliance <> p.category
+    """))
+
+
 def ingest_parts(conn) -> int:
     count = 0
     for raw in _read_jsonl(RAW_DIR / "parts.jsonl"):
@@ -61,20 +80,6 @@ def ingest_parts(conn) -> int:
             _insert_compat(conn, row)
         count += 1
     return count
-
-
-def ingest_seeds(conn):
-    for p in SEED_PARTS:
-        full = {"video_url": None, **p}
-        _insert_part(conn, full)
-    for ps, pairs in SEED_COMPAT.items():
-        for model, brand in pairs:
-            _insert_compat(conn, {
-                "ps_number": ps,
-                "model_number": model,
-                "brand": brand,
-                "appliance": "refrigerator",
-            })
 
 
 def ingest_repairs(conn) -> int:
@@ -136,11 +141,12 @@ def run_ingestion(engine: Engine | None = None) -> dict:
     engine = engine or get_engine()
     apply_schema(engine)
     with engine.begin() as conn:
+        prune_legacy_seed_compat(conn)
+        prune_mismatched_compat(conn)
         already = conn.execute(text("SELECT COUNT(*) FROM parts")).scalar()
         if already and already > 0:
             return {"skipped": True, "parts": already}
         parts = ingest_parts(conn)
-        ingest_seeds(conn)
         repairs = ingest_repairs(conn)
         articles = ingest_articles(conn)
     return {"skipped": False, "parts": parts, "repairs": repairs, "articles": articles}

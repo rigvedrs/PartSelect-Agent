@@ -7,17 +7,21 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.agent.guardrails import is_in_scope
-from app.agent.router import classify_intent, Intent
+from app.agent.router import classify_intent, routing_query, extract_model_number, Intent
 from app.agent.tools.search_parts import search_parts
 from app.agent.tools.check_compatibility import check_compatibility
+from app.agent.tools.list_compatible_parts import list_compatible_parts
 from app.agent.tools.get_installation import get_installation_guide
 from app.agent.tools.troubleshoot import troubleshoot_symptom
 from app.agent.tools.add_to_cart import add_to_cart
+from app.agent.tools.remove_from_cart import remove_from_cart
 from app.agent.graph import run_agent_streaming
 from app.services.chat_history_service import load_langchain_history, record_exchange
 from app.services.session_service import get_session, set_appliance_model, create_session
 
 router = APIRouter(prefix="/api", tags=["chat"])
+
+_PS_RE = re.compile(r"PS\d+", re.IGNORECASE)
 
 
 class ChatRequest(BaseModel):
@@ -27,20 +31,38 @@ class ChatRequest(BaseModel):
     stream: bool = True
 
 
+def _resolve_model(message: str, appliance_model: str | None, session: dict | None) -> str:
+    """Model from current message, then explicit request field, then session — never guess."""
+    m = extract_model_number(message)
+    if m:
+        return m
+    if appliance_model and appliance_model.strip():
+        return appliance_model.strip()
+    if session and session.get("appliance_model"):
+        return session["appliance_model"]
+    return ""
+
+
+def _extract_ps(message: str) -> str | None:
+    m = _PS_RE.search(message)
+    return m.group(0).upper() if m else None
+
+
 @router.post("/chat")
 async def chat(req: ChatRequest):
     session_id = req.session_id or create_session()
     session = get_session(session_id)
 
-    appliance_model = req.appliance_model
-    if appliance_model:
-        set_appliance_model(session_id, appliance_model)
-    elif session:
-        appliance_model = session.get("appliance_model")
+    # Only persist model when client sends a non-empty value
+    if req.appliance_model is not None:
+        set_appliance_model(session_id, req.appliance_model.strip() or None)
+        session = get_session(session_id)
 
     message = req.message.strip()
+    latest = routing_query(message)
+    appliance_model = _resolve_model(latest, req.appliance_model, session)
 
-    if not is_in_scope(message):
+    if not is_in_scope(latest):
         oos_text = (
             "I can only help with Refrigerator and Dishwasher parts. "
             "Please ask me about appliance parts, compatibility, installation, or troubleshooting."
@@ -55,10 +77,10 @@ async def chat(req: ChatRequest):
     intent = classify_intent(message)
 
     if intent == Intent.INSTALL:
-        ps = re.search(r"PS\d+", message, re.IGNORECASE)
+        ps = _extract_ps(latest)
         if ps:
-            guide = get_installation_guide(ps.group(0))
-            text = f"Here are the installation instructions for {guide.get('part_name', ps.group(0))}:"
+            guide = get_installation_guide(ps)
+            text = f"Here are the installation instructions for {guide.get('part_name', ps)}:"
             record_exchange(session_id, message, text)
             return {
                 "session_id": session_id,
@@ -70,11 +92,17 @@ async def chat(req: ChatRequest):
             }
 
     if intent == Intent.COMPATIBILITY:
-        ps = re.search(r"PS\d+", message, re.IGNORECASE)
-        model_m = re.search(r"\b(?!PS\d)[A-Z]{2,6}\d{3,}[A-Z0-9]*\b", message, re.IGNORECASE)
-        _model = appliance_model or (model_m.group(0) if model_m else "")
-        _ps = ps.group(0) if ps else message
-        result = check_compatibility(_model, _ps)
+        ps = _extract_ps(latest)
+        model = _resolve_model(latest, req.appliance_model, session)
+        if not model:
+            text = "Please enter your appliance model number in the field below so I can check compatibility."
+            record_exchange(session_id, message, text)
+            return {"session_id": session_id, "text": text}
+        if not ps:
+            text = "Please include the PartSelect part number (e.g. PS11752778) to check compatibility."
+            record_exchange(session_id, message, text)
+            return {"session_id": session_id, "text": text}
+        result = check_compatibility(model, ps)
         record_exchange(session_id, message, result["reason"])
         return {
             "session_id": session_id,
@@ -82,16 +110,52 @@ async def chat(req: ChatRequest):
             "compatibility": result,
         }
 
-    if intent == Intent.ADD_TO_CART:
-        ps = re.search(r"PS\d+", message, re.IGNORECASE)
+    if intent == Intent.PARTS_FOR_MODEL:
+        model = _resolve_model(latest, req.appliance_model, session)
+        if not model:
+            text = (
+                "To list parts that fit your appliance, enter your model number "
+                "in the field below (e.g. WRS325SDHZ)."
+            )
+            record_exchange(session_id, message, text)
+            return {"session_id": session_id, "text": text}
+        result = list_compatible_parts(model, part_query=latest)
+        record_exchange(session_id, message, result["reason"])
+        return {
+            "session_id": session_id,
+            "text": result["reason"],
+            "parts": result["parts"],
+        }
+
+    if intent == Intent.REMOVE_FROM_CART:
+        ps = _extract_ps(latest)
         if ps:
-            result = add_to_cart(session_id, ps.group(0))
-            text = f"Added {ps.group(0)} to your cart."
+            result = remove_from_cart(session_id, ps)
+            text = (
+                f"Removed {ps} from your cart."
+                if result.get("success")
+                else result.get("error", "Could not remove item.")
+            )
+            record_exchange(session_id, message, text)
+            return {
+                "session_id": session_id,
+                "text": text,
+                "cart_update": result,
+            }
+        text = "Which part should I remove? Include the PS number (e.g. PS11752778)."
+        record_exchange(session_id, message, text)
+        return {"session_id": session_id, "text": text}
+
+    if intent == Intent.ADD_TO_CART:
+        ps = _extract_ps(latest)
+        if ps:
+            result = add_to_cart(session_id, ps)
+            text = f"Added {ps} to your cart."
             record_exchange(session_id, message, text)
             return {"session_id": session_id, "text": text, "cart_update": result}
 
     if intent == Intent.SEARCH:
-        results = search_parts(message)
+        results = search_parts(latest)
         text = f"Found {len(results)} part(s):"
         record_exchange(session_id, message, text)
         return {
@@ -100,12 +164,13 @@ async def chat(req: ChatRequest):
             "parts": results,
         }
 
-    # TROUBLESHOOT / COMPLEX → LangGraph agent (full session history for LLM)
     history = load_langchain_history(session_id)
 
     async def _stream() -> AsyncIterator[bytes]:
         text_parts = []
-        async for chunk in run_agent_streaming(session_id, message, appliance_model, history):
+        async for chunk in run_agent_streaming(
+            session_id, message, appliance_model or None, history
+        ):
             text_parts.append(chunk)
             yield f"data: {json.dumps({'token': chunk})}\n\n".encode()
         full_text = "".join(text_parts)
@@ -116,8 +181,14 @@ async def chat(req: ChatRequest):
         return StreamingResponse(_stream(), media_type="text/event-stream")
     else:
         text_parts = []
-        async for chunk in run_agent_streaming(session_id, message, appliance_model, history):
+        async for chunk in run_agent_streaming(
+            session_id, message, appliance_model or None, history
+        ):
             text_parts.append(chunk)
-        full_text = "".join(text_parts)
+        full_text = "".join(text_parts).strip()
+        if not full_text:
+            full_text = (
+                "I couldn't complete that request. Please try again or rephrase your question."
+            )
         record_exchange(session_id, message, full_text)
         return {"session_id": session_id, "text": full_text}

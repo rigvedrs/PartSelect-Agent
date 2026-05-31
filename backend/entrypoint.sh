@@ -8,4 +8,8 @@ done
 echo "Postgres ready. Running ingestion..."
 python -m app.rag.ingest
 echo "Ingestion done. Starting API..."
-exec uvicorn app.main:app --host 0.0.0.0 --port 8000
+RELOAD_ARGS=""
+if [ "${UVICORN_RELOAD:-}" = "1" ]; then
+  RELOAD_ARGS="--reload --reload-dir /app/app"
+fi
+exec uvicorn app.main:app --host 0.0.0.0 --port 8000 $RELOAD_ARGS

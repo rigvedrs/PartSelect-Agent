@@ -1,6 +1,6 @@
 import React from "react";
 
-export default function ChatHeader({ onCartClick, cartCount }) {
+export default function ChatHeader({ onCartClick, onNewChat, cartCount }) {
   return (
     <div style={{
       background: "var(--partselect-teal)", color: "#fff",
@@ -11,7 +11,21 @@ export default function ChatHeader({ onCartClick, cartCount }) {
         <div style={{ fontWeight: 700, fontSize: "1rem" }}>PartSelect</div>
         <div style={{ fontSize: "0.75rem", opacity: 0.85 }}>AI Assistant</div>
       </div>
+      <div style={{ display: "flex", gap: 8 }}>
+      {onNewChat && (
+        <button
+          type="button"
+          onClick={onNewChat}
+          style={{
+            background: "rgba(255,255,255,0.2)", border: "none", borderRadius: 8,
+            color: "#fff", padding: "6px 10px", cursor: "pointer", fontSize: "0.8rem",
+          }}
+        >
+          New chat
+        </button>
+      )}
       <button
+        type="button"
         onClick={onCartClick}
         style={{
           background: "rgba(255,255,255,0.2)", border: "none", borderRadius: 8,
@@ -20,6 +34,7 @@ export default function ChatHeader({ onCartClick, cartCount }) {
       >
         🛒 {cartCount > 0 ? cartCount : "Cart"}
       </button>
+      </div>
     </div>
   );
 }

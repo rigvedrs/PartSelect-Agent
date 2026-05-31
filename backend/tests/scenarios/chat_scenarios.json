@@ -1,0 +1,56 @@
+[
+  {
+    "id": "greeting_no_model",
+    "message": "Hi",
+    "expect": { "no_model_assumption": true, "not_out_of_scope": true }
+  },
+  {
+    "id": "out_of_scope_recipe",
+    "message": "what is a good pasta recipe?",
+    "expect": { "out_of_scope": true }
+  },
+  {
+    "id": "install_ps11752778",
+    "message": "How can I install part number PS11752778?",
+    "expect": { "has_installation_steps": true, "min_steps": 1 }
+  },
+  {
+    "id": "compat_real_model",
+    "message": "Is PS11752778 compatible with model 10640262010?",
+    "expect": { "compatibility_compatible": true }
+  },
+  {
+    "id": "compat_fake_seed_model",
+    "message": "Is PS11752778 compatible with WDT780SAEM1?",
+    "expect": { "compatibility_compatible": false }
+  },
+  {
+    "id": "parts_for_model_water_filter",
+    "message": "What water filter parts are compatible with 10650502990?",
+    "expect": { "min_parts": 1, "all_parts_have_compat_model": "10650502990" }
+  },
+  {
+    "id": "search_water_filter",
+    "message": "find a water filter for my fridge",
+    "expect": { "min_parts": 1 }
+  },
+  {
+    "id": "cart_add_remove",
+    "sequence": [
+      { "message": "add PS11752778 to cart", "expect": { "cart_min_count": 1 } },
+      { "message": "remove PS11752778 from cart", "expect": { "cart_count": 0 } }
+    ]
+  },
+  {
+    "id": "routing_uses_last_line",
+    "message": "Earlier I asked about recipes.\nremove PS11752778 from cart",
+    "setup": { "precart_ps": "PS11752778" },
+    "expect": { "text_contains": "Removed" }
+  },
+  {
+    "id": "troubleshoot_ice_maker",
+    "message": "my ice maker is not working",
+    "expect": { "has_text": true },
+    "requires_llm": true
+  }
+]

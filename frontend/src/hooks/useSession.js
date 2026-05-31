@@ -1,25 +1,41 @@
-import { useState, useEffect } from "react";
+import { useState, useCallback } from "react";
 import { createSession } from "../lib/api";
 
 export function useSession() {
-  const [sessionId, setSessionId] = useState(() => localStorage.getItem("ps_session_id") || "");
-  const [applianceModel, setApplianceModelState] = useState(
-    () => localStorage.getItem("ps_appliance_model") || ""
-  );
+  const [sessionId, setSessionId] = useState("");
+  const [applianceModel, setApplianceModelState] = useState("");
+  const [modelTouched, setModelTouched] = useState(false);
 
-  useEffect(() => {
-    if (!sessionId) {
-      createSession().then(({ session_id }) => {
-        setSessionId(session_id);
-        localStorage.setItem("ps_session_id", session_id);
-      });
-    }
+  const ensureSession = useCallback(async () => {
+    if (sessionId) return sessionId;
+    const { session_id } = await createSession();
+    setSessionId(session_id);
+    return session_id;
   }, [sessionId]);
 
-  const setApplianceModel = (model) => {
-    setApplianceModelState(model);
-    localStorage.setItem("ps_appliance_model", model);
-  };
+  const startNewChat = useCallback(async () => {
+    const { session_id } = await createSession();
+    setSessionId(session_id);
+    setApplianceModelState("");
+    setModelTouched(false);
+    return session_id;
+  }, []);
 
-  return { sessionId, applianceModel, setApplianceModel };
-}
+  const setApplianceModel = useCallback((model) => {
+    setApplianceModelState(model);
+    setModelTouched(true);
+  }, []);
+
+  /** Only send model to API when user typed in the model field */
+  const applianceModelForApi = modelTouched && applianceModel.trim()
+    ? applianceModel.trim()
+    : null;
+
+  return {
+    sessionId,
+    applianceModel,
+    applianceModelForApi,
+    setApplianceModel,
+    ensureSession,
+    startNewChat,
+  };
