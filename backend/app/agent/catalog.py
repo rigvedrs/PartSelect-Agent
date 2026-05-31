@@ -41,6 +41,7 @@ def _package(
     source: CatalogSource,
     *,
     full_catalog: bool,
+    reason: str | None = None,
 ) -> dict:
     from app.agent.messages import model_referral
 
@@ -50,7 +51,7 @@ def _package(
             "parts": [],
             "count": 0,
             "source": CatalogSource.NONE.value,
-            "reason": model_referral(model),
+            "reason": reason or model_referral(model),
         }
 
     if source == CatalogSource.LIVE:
@@ -100,18 +101,18 @@ def resolve_compatible_parts(request: CatalogRequest) -> dict:
         limit = max(request.limit, settings.full_catalog_limit)
         if _prefer_live_for_full_catalog(model, settings):
             live = sources.fetch_from_live(model, None, limit)
-            if live:
-                log.info("catalog scope=full source=live model=%s n=%d", model, len(live))
-                return _package(model, live, CatalogSource.LIVE, full_catalog=True)
+            if live.parts:
+                log.info("catalog scope=full source=live model=%s n=%d", model, len(live.parts))
+                return _package(model, live.parts, CatalogSource.LIVE, full_catalog=True)
         db = sources.fetch_from_db(model, None, limit)
         if db:
             log.info("catalog scope=full source=db model=%s n=%d", model, len(db))
             return _package(model, db, CatalogSource.DB, full_catalog=True)
         if _live_enabled():
             live = sources.fetch_from_live(model, None, limit)
-            if live:
-                log.info("catalog scope=full source=live-fallback model=%s n=%d", model, len(live))
-                return _package(model, live, CatalogSource.LIVE, full_catalog=True)
+            if live.parts:
+                log.info("catalog scope=full source=live-fallback model=%s n=%d", model, len(live.parts))
+                return _package(model, live.parts, CatalogSource.LIVE, full_catalog=True)
         return _package(model, [], CatalogSource.NONE, full_catalog=True)
 
     limit = min(max(request.limit, 1), settings.filtered_catalog_limit)
@@ -124,10 +125,26 @@ def resolve_compatible_parts(request: CatalogRequest) -> dict:
         return _package(model, db, CatalogSource.DB, full_catalog=False)
     if _live_enabled():
         live = sources.fetch_from_live(model, request.part_type_filter, limit)
-        if live:
+        if live.parts:
             log.info(
                 "catalog scope=by_part_type source=live model=%s filter=%r n=%d",
-                model, request.part_type_filter, len(live),
+                model, request.part_type_filter, len(live.parts),
             )
-            return _package(model, live, CatalogSource.LIVE, full_catalog=False)
+            return _package(model, live.parts, CatalogSource.LIVE, full_catalog=False)
+        if request.part_type_filter and live.total_on_page > 0:
+            from app.agent.messages import part_type_not_found
+            hint = sources.infer_appliance_hint(live.page_part_names)
+            log.info(
+                "catalog scope=by_part_type model=%s filter=%r no_match total=%d hint=%r",
+                model, request.part_type_filter, live.total_on_page, hint,
+            )
+            return _package(
+                model, [], CatalogSource.NONE, full_catalog=False,
+                reason=part_type_not_found(
+                    model,
+                    request.part_type_filter,
+                    total_parts=live.total_on_page,
+                    appliance_hint=hint,
+                ),
+            )
     return _package(model, [], CatalogSource.NONE, full_catalog=False)

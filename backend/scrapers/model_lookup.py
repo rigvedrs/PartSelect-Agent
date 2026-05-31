@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 
 from app.observability import get_logger
 
@@ -105,6 +106,14 @@ def _parse_model_page_dom(driver) -> list[dict]:
     return entries
 
 
+@dataclass(frozen=True)
+class ModelPartsResult:
+    parts: list[dict]
+    total_on_page: int
+    filter_applied: bool
+    page_names: list[str]
+
+
 def _scrape_model_parts_selenium(model: str) -> list[dict]:
     from scrapers import browser
     from scrapers.runtime_fetch import headless_driver
@@ -114,12 +123,12 @@ def _scrape_model_parts_selenium(model: str) -> list[dict]:
         return _parse_model_page_dom(driver)
 
 
-def scrape_model_parts(model: str, part_query: str | None = None) -> list[dict]:
+def scrape_model_parts(model: str, part_query: str | None = None) -> ModelPartsResult:
     """Return parts listed on a model page as {ps_number, name, product_url}."""
     from scrapers.runtime_fetch import live_scrape_available, live_scrape_backend, fetch_markdown
 
     if not live_scrape_available():
-        return []
+        return ModelPartsResult([], 0, False, [])
 
     try:
         if live_scrape_backend() == "selenium":
@@ -127,12 +136,13 @@ def scrape_model_parts(model: str, part_query: str | None = None) -> list[dict]:
         else:
             md = fetch_markdown(model_page_url(model))
             if not md:
-                return []
+                return ModelPartsResult([], 0, False, [])
             entries = parse_product_links_from_markdown(md)
     except Exception:
         log.exception("model page scrape failed model=%s", model)
-        return []
+        return ModelPartsResult([], 0, False, [])
 
+    page_names = [e.get("name") or "" for e in entries]
     kws = _query_keywords(part_query)
     if kws:
         filtered = _filter_entries(entries, kws)
@@ -140,17 +150,17 @@ def scrape_model_parts(model: str, part_query: str | None = None) -> list[dict]:
             "model_lookup model=%s keyword=%r hits=%d/%d backend=%s",
             model, kws, len(filtered), len(entries), live_scrape_backend(),
         )
-        return filtered
+        return ModelPartsResult(filtered, len(entries), True, page_names)
 
     log.info(
         "model_lookup model=%s parts=%d backend=%s",
         model, len(entries), live_scrape_backend(),
     )
-    return entries
+    return ModelPartsResult(entries, len(entries), False, page_names)
 
 
 def scrape_model_part_numbers(model: str, part_query: str | None = None) -> list[str]:
-    return [e["ps_number"] for e in scrape_model_parts(model, part_query)]
+    return [e["ps_number"] for e in scrape_model_parts(model, part_query).parts]
 
 
 def model_lists_part(model: str, ps_number: str) -> bool | None:

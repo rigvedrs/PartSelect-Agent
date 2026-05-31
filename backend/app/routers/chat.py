@@ -133,7 +133,7 @@ async def chat(req: ChatRequest):
 
     if session and session.get("pending_intent") and appliance_model:
         pending = session["pending_intent"]
-        pending_query = session.get("pending_part_query") or part_query
+        pending_query = session.get("pending_part_query") or catalog_filter
         clear_pending(session_id)
         if pending in ("search", "parts_for_model"):
             result = list_compatible_parts(

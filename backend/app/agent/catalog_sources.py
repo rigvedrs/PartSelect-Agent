@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from sqlalchemy import text
 
 from app.db.engine import get_engine
@@ -67,15 +69,34 @@ def fetch_from_db(model: str, part_type_filter: str | None, limit: int) -> list[
     return parts
 
 
-def fetch_from_live(model: str, part_type_filter: str | None, limit: int) -> list[dict]:
+@dataclass(frozen=True)
+class LiveFetchResult:
+    parts: list[dict]
+    total_on_page: int
+    page_part_names: list[str]
+
+
+def _dominant_appliance(names: list[str]) -> str | None:
+    """Best-effort hint from scraped part titles (e.g. refrigerator vs dishwasher)."""
+    text = " ".join(names).lower()
+    fridge = text.count("refrigerator") + text.count(" fridge")
+    dishwasher = text.count("dishwasher")
+    if fridge == 0 and dishwasher == 0:
+        return None
+    if fridge >= dishwasher:
+        return "refrigerator"
+    return "dishwasher"
+
+
+def fetch_from_live(model: str, part_type_filter: str | None, limit: int) -> LiveFetchResult:
     from scrapers.model_lookup import scrape_model_parts
     from app.agent.tools.search_parts import get_part_by_ps
     from app.agent.tools.part_enrichment import enrich_part_details
 
     keywords = part_type_keywords(part_type_filter or "") if part_type_filter else None
-    entries = scrape_model_parts(model, part_type_filter if keywords else None)
+    page = scrape_model_parts(model, part_type_filter if keywords else None)
     live_parts: list[dict] = []
-    for entry in entries[:limit]:
+    for entry in page.parts[:limit]:
         row = get_part_by_ps(entry["ps_number"], fallback=entry)
         if not row:
             continue
@@ -83,4 +104,12 @@ def fetch_from_live(model: str, part_type_filter: str | None, limit: int) -> lis
             row["product_url"] = entry["product_url"]
         row["compat_model"] = model
         live_parts.append(enrich_part_details(row, force_price_refresh=True))
-    return live_parts
+    return LiveFetchResult(
+        parts=live_parts,
+        total_on_page=page.total_on_page,
+        page_part_names=page.page_names,
+    )
+
+
+def infer_appliance_hint(names: list[str]) -> str | None:
+    return _dominant_appliance(names)
