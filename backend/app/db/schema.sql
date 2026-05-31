@@ -65,6 +65,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     created_at TIMESTAMPTZ DEFAULT now(),
     updated_at TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending_intent TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending_part_query TEXT;
 
 CREATE TABLE IF NOT EXISTS session_messages (
     id SERIAL PRIMARY KEY,
