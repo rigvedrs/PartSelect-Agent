@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from sqlalchemy import text
 
-from app.agent.tools.search_parts import _extract_keywords
 from app.db.engine import get_engine
 
 _QUERY_STOP = frozenset({
@@ -17,6 +16,7 @@ _QUERY_STOP = frozenset({
 
 def _part_type_keywords(query: str) -> str | None:
     """Keywords describing the part type (not the model or meta words)."""
+    from app.agent.tools.search_parts import _extract_keywords
     terms = [
         t for t in _extract_keywords(query or "").split()
         if t not in _QUERY_STOP and not t.isdigit()
@@ -36,6 +36,7 @@ def list_compatible_parts(
             "model_number": "",
             "parts": [],
             "count": 0,
+            "source": "none",
             "reason": "Please provide your appliance model number (e.g. WRS325SDHZ).",
         }
 

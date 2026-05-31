@@ -18,7 +18,7 @@ def check_compatibility(model_number: str, part_number_or_query: str) -> dict:
             ps_number = row["ps_number"] if row else None
 
         if not ps_number:
-            return {"compatible": False, "reason": "Part not found.", "alternative_parts": []}
+            return {"compatible": False, "source": "none", "reason": "Part not found.", "alternative_parts": []}
 
         compat = conn.execute(text("""
             SELECT c.model_number, c.brand, c.appliance
