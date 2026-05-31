@@ -89,7 +89,7 @@ def classify_intent(message: str) -> Intent:
         return Intent.REMOVE_FROM_CART
 
     intents_detected = sum([
-        has_cart_add, has_install, has_compat, has_trouble,
+        has_cart_add, has_install, has_compat and not has_parts_for_model, has_trouble,
         has_parts_for_model, has_order_intent,
     ])
     if intents_detected > 1:

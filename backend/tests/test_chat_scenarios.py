@@ -75,6 +75,9 @@ def _assert_expectations(data: dict, expect: dict, session_id: str, client):
     if expect.get("cart_count") is not None:
         cart = client.get(f"/api/cart/{session_id}").json()
         assert cart["count"] == expect["cart_count"]
+    if expect.get("source"):
+        actual = data.get("source") or data.get("compatibility", {}).get("source")
+        assert actual == expect["source"], f"expected source={expect['source']!r} got {actual!r}"
 
 
 @pytest.mark.parametrize("scenario", json.loads(SCENARIOS_PATH.read_text()), ids=lambda s: s["id"])

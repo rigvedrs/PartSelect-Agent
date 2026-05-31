@@ -153,6 +153,7 @@ async def chat(req: ChatRequest):
             "session_id": session_id,
             "text": result["reason"],
             "parts": result["parts"],
+            "source": result.get("source"),
         }
 
     if intent == Intent.REMOVE_FROM_CART:
@@ -203,7 +204,7 @@ async def chat(req: ChatRequest):
             return {"session_id": session_id, "text": ask}
         result = list_compatible_parts(appliance_model, part_query=latest)
         record_exchange(session_id, message, result["reason"])
-        return {"session_id": session_id, "text": result["reason"], "parts": result["parts"]}
+        return {"session_id": session_id, "text": result["reason"], "parts": result["parts"], "source": result.get("source")}
 
     history = load_langchain_history(session_id)
 

@@ -63,5 +63,20 @@
     "id": "troubleshoot_ice_maker",
     "message": "The ice maker on my Whirlpool fridge is not working. How can I fix it?",
     "expect": { "text_contains": "partselect.com/Repair" }
+  },
+  {
+    "id": "compat_db_source_tagged",
+    "message": "Is PS11752778 compatible with model 10640262010?",
+    "expect": { "compatibility_compatible": true, "source": "db" }
+  },
+  {
+    "id": "parts_for_model_db_source_tagged",
+    "message": "What water filter parts are compatible with 10650502990?",
+    "expect": { "min_parts": 1, "source": "db" }
+  },
+  {
+    "id": "list_compat_unknown_model_referral",
+    "message": "What parts fit model WRS0000000?",
+    "expect": { "text_contains": "partselect.com/Models/WRS0000000" }
   }
 ]
