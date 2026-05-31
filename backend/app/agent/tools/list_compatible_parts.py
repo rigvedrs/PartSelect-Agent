@@ -116,10 +116,13 @@ def list_compatible_parts(
         part_query if _part_type_keywords(part_query or "") else None,
     )
     live_parts: list[dict] = []
+    from app.agent.tools.part_enrichment import enrich_part_details
     for entry in entries[:limit]:
         row = get_part_by_ps(entry["ps_number"], fallback=entry)
         if row:
-            live_parts.append(row)
+            if not row.get("product_url") and entry.get("product_url"):
+                row["product_url"] = entry["product_url"]
+            live_parts.append(enrich_part_details(row, force_price_refresh=True))
     if live_parts:
         log.info("list_compatible live model=%s parts=%d", model, len(live_parts))
         return {
