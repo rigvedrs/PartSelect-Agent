@@ -39,7 +39,7 @@ User ──► React Chat Widget (port 3000)
 
 **Data:** PostgreSQL 16 + pgvector HNSW index for semantic search. Embeddings generated locally via `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions). Parts, compatibility, repair guides, and articles are ingested from JSONL under `backend/data/raw/`.
 
-**Live fallback:** When a PS number or model page is not in the database, tools trigger Firecrawl scraping, upsert results, and return them in the same request (requires `FIRECRAWL_API_KEY`).
+**Live fallback:** When a PS number or model page is not in the database, tools use **Selenium + Chrome** (free, default) to scrape PartSelect and return results in the same request. Optional: set `LIVE_SCRAPE_BACKEND=firecrawl` + `FIRECRAWL_API_KEY` for a paid API path that avoids spinning up a browser per request.
 
 ---
 
@@ -121,7 +121,8 @@ Switch providers by changing `base_url`, `api_key_env_var`, and model slugs — 
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) — required for Postgres + Redis
 - **OpenRouter API key** — required for intent classification, troubleshoot synthesis, and `general` agent turns. Get one at [openrouter.ai](https://openrouter.ai)
-- **Firecrawl API key** — optional, enables live scraping for unknown PS numbers. Get one at [firecrawl.dev](https://firecrawl.dev)
+- **Google Chrome** — required for live runtime scraping (Selenium) and the bulk scrape pipeline
+- **Firecrawl API key** — optional; set `LIVE_SCRAPE_BACKEND=firecrawl` for paid API scraping instead of local Chrome
 - For local dev without Docker: Python 3.11 via conda, Node.js 22.12.0 via [asdf](https://asdf-vm.com)
 - For bulk scraping: Google Chrome (Selenium + `webdriver-manager`)
 
@@ -231,7 +232,7 @@ FORCE_REINGEST=1 DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backe
   python -m app.rag.ingest
 ```
 
-Runtime Firecrawl fallback (`scrapers/parts_scraper.py`) is independent of the Selenium pipeline.
+Runtime live scrape (`scrapers/runtime_fetch.py`, `parts_scraper.py`) uses Selenium by default; Firecrawl is opt-in via env.
 
 ### Frontend
 

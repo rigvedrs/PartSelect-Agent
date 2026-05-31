@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from dataclasses import dataclass
 from enum import Enum
 
@@ -32,7 +31,8 @@ class CatalogRequest:
 
 
 def _live_enabled() -> bool:
-    return bool(os.getenv("FIRECRAWL_API_KEY"))
+    from scrapers.runtime_fetch import live_scrape_available
+    return live_scrape_available()
 
 
 def _package(

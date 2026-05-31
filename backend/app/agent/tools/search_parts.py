@@ -24,11 +24,9 @@ def _extract_keywords(query: str) -> str:
 
 
 def _firecrawl_fallback(ps_number: str) -> list[dict]:
-    """Scrape PartSelect for an unknown PS number and ingest it on-the-fly.
-    Returns the newly ingested part row, or empty list if scrape fails or key absent.
-    """
-    api_key = os.getenv("FIRECRAWL_API_KEY", "")
-    if not api_key:
+    """Live-scrape an unknown PS number and ingest on-the-fly."""
+    from scrapers.runtime_fetch import live_scrape_available
+    if not live_scrape_available():
         return []
     try:
         from scrapers.parts_scraper import scrape_and_parse

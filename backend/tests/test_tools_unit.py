@@ -123,9 +123,12 @@ def test_search_parts_fallback_not_called_when_db_has_result():
     assert len(results) == 1
 
 
-def test_search_parts_fallback_returns_empty_without_api_key(monkeypatch):
-    """Fallback returns [] gracefully when FIRECRAWL_API_KEY is absent."""
-    monkeypatch.delenv("FIRECRAWL_API_KEY", raising=False)
+def test_search_parts_fallback_returns_empty_when_scrape_unavailable(monkeypatch):
+    """Fallback returns [] when live scrape is disabled or scrape fails."""
+    monkeypatch.setattr(
+        "scrapers.runtime_fetch.live_scrape_available",
+        lambda: False,
+    )
     from app.agent.tools.search_parts import _firecrawl_fallback
     result = _firecrawl_fallback("PS99999999")
     assert result == []

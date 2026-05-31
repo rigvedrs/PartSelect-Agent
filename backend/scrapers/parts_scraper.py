@@ -1,15 +1,9 @@
-"""Original Firecrawl-based parts scraper.
-
-Scrapes a small sample of PartSelect product pages and writes records in the
-same schema consumed by app.rag.ingest. Run:
-  python -m scrapers.parts_scraper PS11752778 PS12745538
-"""
+"""Runtime PartSelect product scrape — Selenium (free) with optional Firecrawl markdown fallback."""
 import json
 import re
 import sys
 from pathlib import Path
 
-from scrapers.firecrawl_client import scrape_markdown
 from scrapers.product_utils import clean_product_url, parse_product_price
 
 OUT = Path(__file__).resolve().parents[1] / "data" / "raw" / "parts_sample.jsonl"
@@ -30,13 +24,58 @@ def parse_product(ps_number: str, md: str) -> dict:
     }
 
 
+def _scrape_via_selenium(ps: str, url: str) -> dict | None:
+    from scrapers.detail_extractor import extract_product_record
+    from scrapers.runtime_fetch import headless_driver
+
+    with headless_driver() as driver:
+        record = extract_product_record(driver, url)
+    if not record.get("partselect_number"):
+        record["partselect_number"] = ps
+    name = (record.get("name") or "").lower()
+    if "page not found" in name:
+        return None
+    return record
+
+
+def scrape_and_parse(ps_number: str, product_url: str | None = None) -> dict | None:
+    """Scrape PartSelect product page and return parsed raw dict."""
+    from scrapers.runtime_fetch import live_scrape_available, live_scrape_backend, fetch_markdown
+
+    if not live_scrape_available():
+        return None
+
+    ps = ps_number.upper()
+    if not ps.startswith("PS"):
+        ps = f"PS{ps}"
+    url = clean_product_url(product_url) or URL_TMPL.format(ps=ps)
+
+    try:
+        if live_scrape_backend() == "selenium":
+            record = _scrape_via_selenium(ps, url)
+        else:
+            md = fetch_markdown(url)
+            if not md or "page not found" in md.lower()[:800]:
+                return None
+            record = parse_product(ps, md)
+            record["product_url"] = url
+            name = (record.get("name") or "").lower()
+            if "page not found" in name:
+                return None
+        if record:
+            record["product_url"] = clean_product_url(record.get("product_url")) or url
+        return record
+    except Exception:
+        return None
+
+
 def scrape_parts(ps_numbers: list[str]) -> list[dict]:
     results = []
     for ps in ps_numbers:
-        md = scrape_markdown(URL_TMPL.format(ps=ps))
-        record = parse_product(ps, md)
-        results.append(record)
-        print(f"scraped {ps} ({len(md)} chars)")
+        record = scrape_and_parse(ps)
+        if record:
+            results.append(record)
+            print(f"scraped {ps}")
     return results
 
 
@@ -47,26 +86,6 @@ def main(ps_numbers: list[str]):
         for r in records:
             f.write(json.dumps(r) + "\n")
     print(f"wrote {len(records)} records -> {OUT}")
-
-
-def scrape_and_parse(ps_number: str, product_url: str | None = None) -> dict | None:
-    """Scrape PartSelect product page for a PS number and return parsed raw dict."""
-    ps = ps_number.upper()
-    if not ps.startswith("PS"):
-        ps = f"PS{ps}"
-    url = clean_product_url(product_url) or URL_TMPL.format(ps=ps)
-    try:
-        md = scrape_markdown(url)
-        if not md or "page not found" in md.lower()[:800]:
-            return None
-        record = parse_product(ps, md)
-        record["product_url"] = url
-        name = (record.get("name") or "").lower()
-        if "page not found" in name:
-            return None
-        return record
-    except Exception:
-        return None
 
 
 if __name__ == "__main__":

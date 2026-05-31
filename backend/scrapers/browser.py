@@ -21,7 +21,11 @@ _DEFAULT_UA = (
 
 
 def build_chrome(headless: bool = True, window_size: str = "1400,1000") -> webdriver.Chrome:
+    import os
     opts = Options()
+    chrome_bin = os.getenv("CHROME_BIN")
+    if chrome_bin:
+        opts.binary_location = chrome_bin
     if headless:
         opts.add_argument("--headless=new")
     opts.add_argument("--no-sandbox")
@@ -31,7 +35,11 @@ def build_chrome(headless: bool = True, window_size: str = "1400,1000") -> webdr
     opts.add_argument(f"--window-size={window_size}")
     opts.add_argument("--lang=en-US,en")
     opts.add_argument(f"--user-agent={_DEFAULT_UA}")
-    service = Service(ChromeDriverManager().install())
+    driver_path = os.getenv("CHROMEDRIVER_PATH")
+    if driver_path:
+        service = Service(driver_path)
+    else:
+        service = Service(ChromeDriverManager().install())
     driver = webdriver.Chrome(service=service, options=opts)
     try:
         driver.execute_cdp_cmd(
