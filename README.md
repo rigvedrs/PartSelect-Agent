@@ -51,7 +51,8 @@ Every chat message goes through the same pipeline:
 2. **Intent classification** — one structured LLM call (`deepseek/deepseek-v4-flash`) returns intent, optional `part_query`, and optional `ps_number`.
 3. **Cart intent reconciliation** — verb-based override (`add` / `remove`) corrects misclassified cart intents.
 4. **PS resolution** — for cart actions, resolve the target part in priority order: explicit PS in message → pronoun reference to **latest** shown batch → name match in session history → classifier PS.
-5. **Handler** — run the matching deterministic handler or, for `general` only, stream through the LangGraph agent.
+5. **Pending slot completion** — if the session has a `pending_intent` (e.g. user searched for a part type without a model) and the current message supplies a model number, the pending search runs **before** the classified intent handler, preserving the original part-type query.
+6. **Handler** — run the matching deterministic handler or, for `general` only, stream through the LangGraph agent.
 
 Handlers record exchanges in `session_messages` and update `last_parts_json` whenever parts are returned, so follow-up turns ("add it", "remove that filter") stay grounded in what the user actually saw.
 
@@ -70,7 +71,9 @@ Handlers record exchanges in `session_messages` and update `last_parts_json` whe
 | `add_to_cart` / `remove_from_cart` | Cart tools + session PS resolution | No |
 | `general` | LangGraph ReAct agent (no cart tools) | Yes (pro) |
 
-**Pending slots:** If the user searches for a part type without a model number, the session stores `pending_intent` + `pending_part_query`. The next message that includes a model clears the slot and completes the search.
+**Pending slots:** If the user searches for a part type without a model number, the session stores `pending_intent` + `pending_part_query`. The next message that includes a model clears the slot and completes the search with `CatalogScope.BY_PART_TYPE`, even if the classifier labels that turn as `parts_for_model`.
+
+Example: *"Find wheels for my dishwasher"* → agent asks for model → user replies *`WDT780SAEM1`* → live lookup for wheels on that model.
 
 **`browse_all_parts`:** The classifier sets this flag when the user wants a full model catalog (e.g. "list all parts for my fridge") rather than a filtered type search. That drives `CatalogScope.FULL` instead of `BY_PART_TYPE` in the catalog resolver.
 
@@ -89,7 +92,17 @@ Compatible-parts lookups use explicit scope and configurable source precedence (
 
 **DB completeness:** For full-catalog requests, the DB is only trusted when it has at least `db_completeness_min_parts` rows for that model (default 5). A stale partial ingest (e.g. 2 rows) triggers live Selenium scrape of the model page instead of returning incomplete results.
 
-**Runtime scrape backend:** Selenium + Chrome is the default (`LIVE_SCRAPE_BACKEND=selenium`). Set `LIVE_SCRAPE_BACKEND=firecrawl` + `FIRECRAWL_API_KEY` for a paid API path without local Chrome.
+**Runtime scrape backend:** Selenium + Chrome is the default (`LIVE_SCRAPE_BACKEND=selenium`). Set `LIVE_SCRAPE_BACKEND=firecrawl` + `FIRECRAWL_API_KEY` for a paid API path without local Chrome. The Docker backend image includes Chromium for container live scrape.
+
+**Catalog outcomes** — the resolver distinguishes three empty-result cases (`app/agent/messages.py`):
+
+| Situation | User sees |
+|-----------|-----------|
+| Model not on PartSelect / scrape failed | Link to model page (`model_referral`) |
+| Model found, part-type filter matched nothing | Count of listed parts + filter used + optional refrigerator/dishwasher mismatch hint (`part_type_not_found`) |
+| PS or keyword search missed in DB | PartSelect search link (`search_referral`) |
+
+When live scrape finds parts on the model page but none match the filter (e.g. wheels on a refrigerator model), the agent explains the mismatch instead of saying the model could not be confirmed.
 
 ---
 
@@ -165,6 +178,26 @@ open http://localhost:3000
 
 The first startup downloads the embedding model (~90 MB) and ingests JSONL data — takes about 60 seconds. Subsequent starts are instant unless `FORCE_REINGEST=1` is set.
 
+After code or data changes, restart the backend: `docker compose restart backend`.
+
+---
+
+## Environment variables
+
+Copy `.env.example` → `.env`. Key variables:
+
+| Variable | Required | Default | Purpose |
+|----------|----------|---------|---------|
+| `OPENROUTER_API_KEY` | Yes (for chat) | — | Intent classifier, troubleshoot synthesis, LangGraph agent |
+| `POSTGRES_PASSWORD` | No | `partselect` | Must match `docker-compose.yml` / `config.toml` |
+| `LIVE_SCRAPE_BACKEND` | No | `selenium` | `selenium` (free, Chrome/Chromium) or `firecrawl` (paid API) |
+| `FIRECRAWL_API_KEY` | Only for Firecrawl | — | Required when `LIVE_SCRAPE_BACKEND=firecrawl` |
+| `DB_HOST` | No | `postgres` in Docker | Set to `localhost` for host-side ingest, pytest, or scrape |
+| `FORCE_REINGEST` | No | unset | Set to `1` to reload JSONL into Postgres on startup / ingest |
+| `LOG_LEVEL` | No | `INFO` | Set to `DEBUG` for verbose request tracing |
+
+Host-side commands (ingest, scrape, pytest) need `DB_HOST=localhost` and `POSTGRES_PASSWORD=partselect`.
+
 ---
 
 ## Example queries
@@ -175,6 +208,8 @@ The first startup downloads the embedding model (~90 MB) and ingests JSONL data 
 | 2 | `Is PS11752778 compatible with my WDT780SAEM1 model?` | Deterministic SQL → compatibility result |
 | 3 | `My ice maker is not working` | RAG over repair guides + articles → pro synthesis → resource footer |
 | 4 | `find a water filter for my fridge` then `add it` | Model-first search → session `latest` → contextual cart add |
+| 5 | `Find wheels for my dishwasher` then `WDT780SAEM1` | Pending slot → filtered live catalog → matching wheel parts |
+| 6 | `Find wheels for my dishwasher` then `WRX735SDHZ00` | Pending slot → model found (refrigerator) but no wheel parts → mismatch hint |
 
 Queries 1–2 work without an API key for the data layer; intent classification and query 3+ require `OPENROUTER_API_KEY`.
 
@@ -310,10 +345,11 @@ Each log line includes `req=<id>` for end-to-end tracing:
 |--------|----------------|
 | `routers.chat` | Intent, model source, handler path |
 | `agent.router` | Classification result |
+| `agent.catalog` | Catalog scope, source (db/live), filter no-match |
 | `agent.troubleshoot` | RAG hit counts (causes, articles, parts) |
 | `agent.graph` | Empty-text warnings, LLM/tool exceptions |
 | `tools.list_compatible_parts` | DB hits, live-scrape fallback |
-| `scrapers.model_lookup` | Model page scrape outcomes |
+| `scrapers.model_lookup` | Model page scrape outcomes, keyword filter hits |
 
 Set `LOG_LEVEL=DEBUG` in `.env` for verbose output.
 
@@ -330,6 +366,9 @@ PYTHONPATH=backend pytest backend/tests/ \
   --ignore=backend/tests/test_ingest_integration.py \
   --ignore=backend/tests/test_api_integration.py \
   --ignore=backend/tests/test_chat_scenarios.py -v
+
+# Catalog policy + model page parsing (no network)
+PYTHONPATH=backend pytest backend/tests/test_catalog.py backend/tests/test_model_lookup.py -v
 
 # API integration + scenarios (requires Postgres)
 docker compose up -d postgres
@@ -393,15 +432,17 @@ partselect-agent/
 │   │   │   ├── troubleshoot_handler.py  # RAG + synthesis + footer
 │   │   │   ├── llm_provider.py     # flash classifier + pro synthesis
 │   │   │   ├── graph.py            # LangGraph (GENERAL only)
-│   │   │   ├── messages.py         # Shared user-facing templates
+│   │   │   ├── messages.py         # User-facing templates (referrals, troubleshoot footer)
 │   │   │   └── tools/              # search, compat, install, troubleshoot, cart
-│   │   ├── routers/chat.py         # Intent → handler dispatch
+│   │   ├── routers/chat.py         # Intent → handler dispatch + pending slots
 │   │   ├── services/               # session, cart, chat history
 │   │   └── rag/                    # embedder + ingest
 │   ├── scrapers/                   # Selenium pipeline + runtime fetch
 │   │   ├── run_collection.py       # Stage orchestrator CLI
 │   │   ├── merge_catalog.py        # Incremental merge + refresh-db
+│   │   ├── model_lookup.py         # Live model-page scrape + part-type filter
 │   │   ├── runtime_fetch.py        # Selenium (default) or Firecrawl live scrape
+│   │   ├── detail_extractor.py     # Bulk product-page scrape
 │   │   └── product_utils.py        # Shared URL/price parsing
 │   └── tests/
 └── frontend/
@@ -442,9 +483,9 @@ Runtime live scrape backend is controlled via env (not `config.toml`): `LIVE_SCR
 
 **RAG troubleshoot with guardrails:** Retrieved repair guides and articles constrain the synthesis prompt; a fixed footer always points users to PartSelect Repair and Instant Repairman.
 
-**Hybrid data + live enrichment:** JSONL bulk ingest plus Selenium (default) or Firecrawl refresh for missing catalog rows, stale prices, and incomplete model listings. `catalog.py` applies explicit scope and completeness thresholds so partial DB ingests do not mask live results. `part_enrichment.py` validates parts, refreshes prices from product URLs, and filters "Page Not Found" junk.
+**Hybrid data + live enrichment:** JSONL bulk ingest plus Selenium (default) or Firecrawl refresh for missing catalog rows, stale prices, and incomplete model listings. `catalog.py` applies explicit scope and completeness thresholds so partial DB ingests do not mask live results. Empty results use distinct messages for unknown models vs. known models with no matching part type. `part_enrichment.py` validates parts, refreshes prices from product URLs, and filters "Page Not Found" junk.
 
-**Incremental scrape + merge:** Bulk pipeline checkpoints per URL; `merge_catalog.py` overlays partial `details`/`enrich` work onto `parts.jsonl` without a full re-scrape, preserving enrichment fields when fresh rows are thinner.
+**Incremental scrape + merge:** Bulk pipeline checkpoints per URL; `merge_catalog.py` overlays partial `details`/`enrich` work onto `parts.jsonl` without a full re-scrape, preserving enrichment fields when fresh rows are thinner. The `details` stage captures YouTube watch URLs from product HTML (no video download or slow UI expand).
 
 **pgvector HNSW:** 384-dim MiniLM embeddings; cosine search over `repair` and `article` sources in the `embeddings` table.
 
