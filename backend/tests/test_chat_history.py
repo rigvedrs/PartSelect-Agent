@@ -26,6 +26,18 @@ def test_to_langchain_messages():
     assert isinstance(msgs[1], AIMessage)
 
 
+def test_metadata_json_serializes_decimal_prices():
+    from decimal import Decimal
+    from app.services.chat_history_service import _metadata_json
+
+    raw = _metadata_json({
+        "parts": [{"ps_number": "PS1", "name": "Filter", "price": Decimal("42.8300")}],
+    })
+    assert raw is not None
+    parsed = __import__("json").loads(raw)
+    assert parsed["parts"][0]["price"] == 42.83
+
+
 def test_load_and_record_exchange(session_id):
     from app.services.chat_history_service import (
         load_langchain_history,
