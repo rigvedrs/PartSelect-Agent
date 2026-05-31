@@ -39,6 +39,13 @@ def test_out_of_scope_rejected(client):
     assert r.json().get("out_of_scope") is True
 
 
+requires_llm = pytest.mark.skipif(
+    not os.getenv("OPENROUTER_API_KEY"),
+    reason="requires OPENROUTER_API_KEY for LLM intent router",
+)
+
+
+@requires_llm
 def test_install_query(client):
     """Case-study example query 1: install PS11752778"""
     sid = client.post("/api/session").json()["session_id"]
@@ -53,6 +60,7 @@ def test_install_query(client):
     assert len(data["installation_steps"]) > 0
 
 
+@requires_llm
 def test_compatibility_query(client):
     """PS11752778 + real ingested model (not demo seed)."""
     sid = client.post("/api/session").json()["session_id"]
@@ -67,6 +75,7 @@ def test_compatibility_query(client):
     assert data["compatibility"]["compatible"] is True
 
 
+@requires_llm
 def test_remove_from_cart_via_chat(client):
     sid = client.post("/api/session").json()["session_id"]
     client.post("/api/chat", json={
@@ -80,6 +89,7 @@ def test_remove_from_cart_via_chat(client):
     assert client.get(f"/api/cart/{sid}").json()["count"] == 0
 
 
+@requires_llm
 def test_greeting_does_not_assume_model(client):
     sid = client.post("/api/session").json()["session_id"]
     r = client.post("/api/chat", json={
@@ -89,6 +99,7 @@ def test_greeting_does_not_assume_model(client):
     assert "wdt780saem1" not in text
 
 
+@requires_llm
 def test_appliance_model_persisted_in_session(client):
     """Model set in one request is returned in session and used in next."""
     sid = client.post("/api/session").json()["session_id"]
@@ -108,6 +119,7 @@ def test_appliance_model_persisted_in_session(client):
     assert session["appliance_model"] == "WDT780SAEM1"
 
 
+@requires_llm
 def test_cart_flow(client):
     sid = client.post("/api/session").json()["session_id"]
     r = client.post("/api/chat", json={
@@ -121,6 +133,7 @@ def test_cart_flow(client):
     assert r2.json()["count"] >= 1
 
 
+@requires_llm
 def test_cart_delete(client):
     sid = client.post("/api/session").json()["session_id"]
     client.post("/api/chat", json={

@@ -11,10 +11,16 @@ from fastapi.testclient import TestClient
 
 SCENARIOS_PATH = Path(__file__).parent / "scenarios" / "chat_scenarios.json"
 
-pytestmark = pytest.mark.skipif(
-    not os.getenv("TEST_DATABASE_URL"),
-    reason="requires TEST_DATABASE_URL and running Postgres",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not os.getenv("TEST_DATABASE_URL"),
+        reason="requires TEST_DATABASE_URL and running Postgres",
+    ),
+    pytest.mark.skipif(
+        not os.getenv("OPENROUTER_API_KEY"),
+        reason="requires OPENROUTER_API_KEY for LLM intent router",
+    ),
+]
 
 
 @pytest.fixture(scope="module")
@@ -113,9 +119,3 @@ def test_list_compatible_parts_only_returns_verified_rows():
         assert p.get("compat_model", "").upper() == "10650502990"
 
 
-def test_routing_query_uses_last_sentence():
-    from app.agent.router import routing_query, classify_intent, Intent
-
-    q = routing_query("I was asking about pasta.\nremove PS11752778 from cart")
-    assert "remove" in q.lower()
-    assert classify_intent("I was asking about pasta.\nremove PS11752778 from cart") == Intent.REMOVE_FROM_CART

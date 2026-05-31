@@ -99,6 +99,14 @@
     ]
   },
   {
+    "id": "add_last_shown_part_to_cart",
+    "sequence": [
+      { "message": "How can I install part number PS11752778?", "expect": { "has_installation_steps": true } },
+      { "message": "add it to cart", "expect": { "text_contains": "Added", "cart_min_count": 1 } },
+      { "message": "remove it from cart", "expect": { "text_contains": "Removed", "cart_count": 0 } }
+    ]
+  },
+  {
     "id": "list_compat_unknown_model_referral",
     "message": "What parts fit model WRS0000000?",
     "expect": { "text_contains": "partselect.com/Models/WRS0000000" }
