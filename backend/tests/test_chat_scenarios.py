@@ -67,6 +67,8 @@ def _assert_expectations(data: dict, expect: dict, session_id: str, client):
                 assert p.get("compat_model", "").upper() == model
     if expect.get("text_contains"):
         assert expect["text_contains"].lower() in (data.get("text") or "").lower()
+    if expect.get("text_not_contains"):
+        assert expect["text_not_contains"].lower() not in (data.get("text") or "").lower()
     if expect.get("has_text"):
         assert (data.get("text") or "").strip()
     if expect.get("cart_min_count") is not None:

@@ -11,7 +11,23 @@ _QUERY_STOP = frozenset({
     "compatible", "compatibility", "parts", "part", "model", "fit", "fits",
     "work", "with", "for", "my", "what", "which", "show", "list", "are", "is",
     "the", "a", "an", "how", "do", "can", "you", "tell", "me", "about",
+    "well", "too", "also", "there", "its", "same", "all", "as", "just", "even",
+    "one", "some", "any", "other", "else", "then", "when", "that", "this",
 })
+
+
+def _part_text(part: dict) -> str:
+    return ((part.get("name") or "") + " " + (part.get("description") or "")).lower()
+
+
+def _filter_by_keywords(parts: list[dict], kws: list[str]) -> list[dict]:
+    """Match parts by keywords — try AND first, fall back to OR if nothing matches."""
+    if not kws:
+        return parts
+    and_hits = [p for p in parts if all(k in _part_text(p) for k in kws)]
+    if and_hits:
+        return and_hits
+    return [p for p in parts if any(k in _part_text(p) for k in kws)]
 
 
 def _part_type_keywords(query: str) -> str | None:
@@ -93,21 +109,15 @@ def list_compatible_parts(
     # Live fallback: scrape the model page, hydrate any PS numbers we can
     from scrapers.model_lookup import scrape_model_part_numbers
     from app.agent.tools.search_parts import search_parts
-    ps_numbers = scrape_model_part_numbers(model)
+    ps_numbers = scrape_model_part_numbers(model, part_query)
     live_parts: list[dict] = []
-    for ps in ps_numbers[:20]:
+    for ps in ps_numbers[:50]:
         hit = search_parts(ps)
         live_parts.extend(hit)
     if part_query and part_query.strip() and live_parts:
         kws = (_part_type_keywords(part_query) or "").split()
         if kws:
-            live_parts = [
-                p for p in live_parts
-                if all(
-                    k in (p.get("name", "") + " " + (p.get("description") or "")).lower()
-                    for k in kws
-                )
-            ]
+            live_parts = _filter_by_keywords(live_parts, kws)
     if live_parts:
         log.info("list_compatible live model=%s parts=%d", model, len(live_parts))
         return {

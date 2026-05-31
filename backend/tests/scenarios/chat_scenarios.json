@@ -83,6 +83,22 @@
     ]
   },
   {
+    "id": "followup_part_searches_with_session_model",
+    "sequence": [
+      { "message": "find a water filter for my fridge", "expect": { "text_contains": "model number" } },
+      { "message": "10650502990", "expect": { "min_parts": 1 } },
+      {
+        "message": "Find door hinge for it",
+        "expect": { "has_text": true, "text_not_contains": "what's your appliance model" }
+      },
+      {
+        "message": "Is there a pivot block for it as well",
+        "expect": { "has_text": true, "text_not_contains": "couldn't complete" }
+      },
+      { "message": "List all its parts", "expect": { "has_text": true, "min_parts": 1 } }
+    ]
+  },
+  {
     "id": "list_compat_unknown_model_referral",
     "message": "What parts fit model WRS0000000?",
     "expect": { "text_contains": "partselect.com/Models/WRS0000000" }

@@ -36,6 +36,7 @@ _PARTS_FOR_MODEL_KW = (
     "compatible parts", "parts compatible", "parts for my", "parts that fit",
     "what parts fit", "which parts fit", "list parts", "show parts for",
     "parts work with", "fits my model", "for my model",
+    "list all", "all parts", "all its parts", "its parts", "every part",
 )
 _TROUBLE_KW = (
     "not working", "broken", "leaking", "won't", "wont", "doesn't", "doesnt",
@@ -48,7 +49,10 @@ _CART_REMOVE_KW = (
     "remove from cart", "delete from cart", "remove from my cart",
     "take out of cart", "take off cart", "remove it from cart",
 )
-_SEARCH_KW = ("find", "search", "look up", "show me", "what is", "price of", "need a", "looking for")
+_SEARCH_KW = (
+    "find", "search", "look up", "show me", "what is", "price of", "need a", "looking for",
+    "is there", "do you have", "got a", "get a", "get me",
+)
 
 
 def routing_query(message: str) -> str:
@@ -112,3 +116,9 @@ def classify_intent(message: str) -> Intent:
         return Intent.SEARCH
 
     return Intent.COMPLEX
+
+
+def looks_like_part_search(message: str) -> bool:
+    """True when a message is likely a part lookup (used for session-aware COMPLEX fallback)."""
+    lower = routing_query(message).lower()
+    return any(kw in lower for kw in _SEARCH_KW)

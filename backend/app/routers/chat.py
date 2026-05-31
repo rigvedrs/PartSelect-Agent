@@ -7,7 +7,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app.agent.guardrails import is_in_scope
-from app.agent.router import classify_intent, routing_query, extract_model_number, Intent
+from app.agent.router import classify_intent, routing_query, extract_model_number, Intent, looks_like_part_search
 from app.agent.tools.search_parts import search_parts
 from app.agent.tools.check_compatibility import check_compatibility
 from app.agent.tools.list_compatible_parts import list_compatible_parts
@@ -52,6 +52,13 @@ def _resolve_model(message: str, appliance_model: str | None, session: dict | No
 def _extract_ps(message: str) -> str | None:
     m = _PS_RE.search(message)
     return m.group(0).upper() if m else None
+
+
+def _parts_lookup_limit(message: str) -> int:
+    lower = routing_query(message).lower()
+    if any(kw in lower for kw in ("list all", "all parts", "all its parts", "every part")):
+        return 20
+    return 10
 
 
 @router.post("/chat")
@@ -154,7 +161,7 @@ async def chat(req: ChatRequest):
             )
             record_exchange(session_id, message, text)
             return {"session_id": session_id, "text": text}
-        result = list_compatible_parts(model, part_query=latest)
+        result = list_compatible_parts(model, part_query=latest, limit=_parts_lookup_limit(latest))
         record_exchange(session_id, message, result["reason"])
         return {
             "session_id": session_id,
@@ -209,9 +216,22 @@ async def chat(req: ChatRequest):
             )
             record_exchange(session_id, message, ask)
             return {"session_id": session_id, "text": ask}
-        result = list_compatible_parts(appliance_model, part_query=latest)
+        result = list_compatible_parts(appliance_model, part_query=latest, limit=_parts_lookup_limit(latest))
         record_exchange(session_id, message, result["reason"])
         return {"session_id": session_id, "text": result["reason"], "parts": result["parts"], "source": result.get("source")}
+
+    # Session-aware fallback: part lookup phrasing that didn't match a single intent
+    if intent == Intent.COMPLEX and appliance_model and looks_like_part_search(latest):
+        result = list_compatible_parts(
+            appliance_model, part_query=latest, limit=_parts_lookup_limit(latest),
+        )
+        record_exchange(session_id, message, result["reason"])
+        return {
+            "session_id": session_id,
+            "text": result["reason"],
+            "parts": result["parts"],
+            "source": result.get("source"),
+        }
 
     history = load_langchain_history(session_id)
 

@@ -15,8 +15,18 @@ def model_page_url(model: str) -> str:
     return _MODEL_URL.format(model=model.strip().upper())
 
 
-def scrape_model_part_numbers(model: str) -> list[str]:
-    """Return distinct PS numbers found on a model page. Empty list on any failure."""
+def _query_keywords(part_query: str | None) -> list[str]:
+    if not part_query:
+        return []
+    from app.agent.tools.search_parts import _extract_keywords
+    return [w for w in _extract_keywords(part_query).split() if len(w) > 2]
+
+
+def scrape_model_part_numbers(model: str, part_query: str | None = None) -> list[str]:
+    """Return distinct PS numbers found on a model page. Empty list on any failure.
+
+    When part_query is given, PS numbers on lines matching those keywords are returned first.
+    """
     if not os.getenv("FIRECRAWL_API_KEY"):
         return []
     try:
@@ -27,14 +37,38 @@ def scrape_model_part_numbers(model: str) -> list[str]:
         return []
     if not md:
         return []
-    seen, out = set(), []
+    seen: set[str] = set()
+    all_ps: list[str] = []
     for m in _PS_RE.finditer(md):
         ps = m.group(0).upper()
         if ps not in seen:
             seen.add(ps)
-            out.append(ps)
-    log.info("model_lookup model=%s found_ps=%d", model, len(out))
-    return out
+            all_ps.append(ps)
+
+    kws = _query_keywords(part_query)
+    if not kws:
+        log.info("model_lookup model=%s found_ps=%d", model, len(all_ps))
+        return all_ps
+
+    prioritized: list[str] = []
+    prio_seen: set[str] = set()
+    for line in md.splitlines():
+        ll = line.lower()
+        if not any(k in ll for k in kws):
+            continue
+        for m in _PS_RE.finditer(line):
+            ps = m.group(0).upper()
+            if ps not in prio_seen:
+                prio_seen.add(ps)
+                prioritized.append(ps)
+
+    if prioritized:
+        combined = prioritized + [ps for ps in all_ps if ps not in prio_seen]
+        log.info("model_lookup model=%s keyword_hits=%d total=%d", model, len(prioritized), len(combined))
+        return combined
+
+    log.info("model_lookup model=%s found_ps=%d (no keyword lines)", model, len(all_ps))
+    return all_ps
 
 
 def model_lists_part(model: str, ps_number: str) -> bool | None:
