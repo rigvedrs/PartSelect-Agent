@@ -3,12 +3,25 @@ from langchain_openai import ChatOpenAI
 from app.config import load_settings
 
 
+@lru_cache(maxsize=1)
+def get_classifier_llm() -> ChatOpenAI:
+    """Non-streaming tool model for structured classification output."""
+    s = load_settings()
+    return ChatOpenAI(
+        model=s.llm.tool_model,
+        openai_api_key=s.llm.api_key or "placeholder",
+        openai_api_base=s.llm.base_url,
+        streaming=False,
+        temperature=s.llm.tool_temperature,
+    )
+
+
 @lru_cache(maxsize=2)
 def get_llm(role: str = "tool") -> ChatOpenAI:
     """Return a ChatOpenAI instance for the given role.
 
-    role='tool'      → fast model, temperature=0 (tool-calling decisions)
-    role='synthesis' → stronger model, higher temp (natural language responses)
+    role='tool'      → fast model, temperature=0 (intent classification only)
+    role='synthesis' → pro model (agent tool-use + natural language responses)
 
     All model slugs and temperatures come from config.toml — no hardcoding.
     """
