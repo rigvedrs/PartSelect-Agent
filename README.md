@@ -29,8 +29,8 @@ User ──► React Chat Widget (port 3000)
               │
      ┌────────┴──────────┬──────────────────────┐
      ▼                   ▼                      ▼
- SQL / Firecrawl    RAG + synthesis LLM    LangGraph ReAct
- tools              (troubleshoot only)    (GENERAL intent only)
+ SQL / Selenium     RAG + synthesis LLM    LangGraph ReAct
+ (live fallback)    (troubleshoot only)    (GENERAL intent only)
      │                   │                      │
      │              pgvector retrieval          │ deepseek-v4-pro
      │              repair_guides + articles    │ search · compat · install
@@ -72,7 +72,24 @@ Handlers record exchanges in `session_messages` and update `last_parts_json` whe
 
 **Pending slots:** If the user searches for a part type without a model number, the session stores `pending_intent` + `pending_part_query`. The next message that includes a model clears the slot and completes the search.
 
+**`browse_all_parts`:** The classifier sets this flag when the user wants a full model catalog (e.g. "list all parts for my fridge") rather than a filtered type search. That drives `CatalogScope.FULL` instead of `BY_PART_TYPE` in the catalog resolver.
+
 **Intent–tool guardrails:** Each intent maps to an allowed tool set (`guardrails.py`). Handlers call `assert_tool_allowed()` before cart mutations. The LangGraph agent does not expose cart tools — cart changes always go through the deterministic router.
+
+---
+
+## Catalog search policy
+
+Compatible-parts lookups use explicit scope and configurable source precedence (`app/agent/catalog.py`, `config.toml` `[catalog]`):
+
+| Scope | When | Typical source order |
+|-------|------|----------------------|
+| `FULL` | User asks for all parts on a model (`browse_all_parts`) | Live model page first (if enabled), else DB if complete enough |
+| `BY_PART_TYPE` | Filtered search ("water filter for WDT780SAEM1") | DB first, live fallback if sparse |
+
+**DB completeness:** For full-catalog requests, the DB is only trusted when it has at least `db_completeness_min_parts` rows for that model (default 5). A stale partial ingest (e.g. 2 rows) triggers live Selenium scrape of the model page instead of returning incomplete results.
+
+**Runtime scrape backend:** Selenium + Chrome is the default (`LIVE_SCRAPE_BACKEND=selenium`). Set `LIVE_SCRAPE_BACKEND=firecrawl` + `FIRECRAWL_API_KEY` for a paid API path without local Chrome.
 
 ---
 
@@ -215,13 +232,18 @@ PYTHONPATH=backend python -m scrapers.verify_output --audit
 | Stage | Module | Output |
 |-------|--------|--------|
 | `catalog` | `catalog_crawler.py` | Product URLs by category |
-| `details` | `detail_extractor.py` | Per-product JSONL (price, name, symptoms) |
+| `seed-urls` | `run_collection.py` | Rebuild `product_links_deduped.jsonl` from existing `parts.jsonl` (skip catalog crawl) |
+| `details` | `detail_extractor.py` | Per-product JSONL (price, name, symptoms, YouTube watch URL from HTML) |
 | `enrich` | `compat_enricher.py` | Model cross-references (clicks "Load more", no 30-row cap) |
 | `repairs` | `repair_guides.py` | Symptom → part repair rows |
 | `articles` | `article_collector.py` | Blog / how-to articles |
+| `merge` | `merge_catalog.py` | Overlay `scrape_work/details/` + `enrich/` onto `parts.jsonl` by PS number |
+| `refresh-db` | `merge_catalog.py` + ingest | `merge` then `FORCE_REINGEST=1` ingest into Postgres |
 | `export` | `run_collection.py` | Copies work files → `backend/data/raw/*.jsonl` |
 
-Intermediate files live under `backend/data/scrape_work/` (gitignored). Final exports overwrite `backend/data/raw/{parts,repairs,articles}.jsonl` (previous files copied to `backend/data/raw/_backup/` when using `--backup`).
+Intermediate files live under `backend/data/scrape_work/` (gitignored). Checkpoints (`urls_done.txt`, `product_details.jsonl`) let `details` and `enrich` resume after interruption. Final exports overwrite `backend/data/raw/{parts,repairs,articles}.jsonl` (previous files copied to `backend/data/raw/_backup/` when using `--backup`).
+
+**`--limit`:** For `details` and `enrich`, limits how many **new** records to scrape this run. Already-done URLs (checkpoint) are skipped and do **not** count toward the limit — so `--limit 200` always means "scrape up to 200 new products," not "examine 200 rows from the input file."
 
 **Shared price parsing:** `scrapers/product_utils.py` (`parse_product_price`, `clean_product_url`) is used by the bulk pipeline and runtime enrichment so chat/cart prices match PartSelect product pages.
 
@@ -236,18 +258,25 @@ DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backend \
 **Incremental workflow** — full Selenium scrape of 6k+ URLs takes hours. Run in batches:
 
 ```bash
-# Resume details (checkpoints skip done URLs; captures YouTube links from HTML, no download)
+# Scrape up to 200 NEW product pages (skips checkpoint URLs automatically)
 PYTHONPATH=backend python -m scrapers.run_collection --stage details --limit 200
+# Example stats: {'processed': 200, 'skipped': 341, 'written': 200, ...}
 
 # Optional: add model cross-refs (slow — clicks "Load more" per product)
 PYTHONPATH=backend python -m scrapers.run_collection --stage enrich --limit 50
 
-# Merge fresh data into parts.jsonl + re-ingest
+# Merge fresh scrape work into parts.jsonl + reload Postgres (~30s)
 DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backend \
   python -m scrapers.run_collection --stage refresh-db
 ```
 
-`merge` overlays `scrape_work/details/` and `scrape_work/enrich/` onto `parts.jsonl` by PS number and **keeps existing `model_cross_reference`** when fresh rows lack it.
+`merge` / `refresh-db` overlay `scrape_work/details/` and `scrape_work/enrich/` onto `parts.jsonl` by PS number. When fresh rows lack enrichment fields, existing **`model_cross_reference`**, **`main_image`**, and **`video_url`** are preserved from the prior catalog row.
+
+After `refresh-db`, restart the backend container if you use Docker so in-memory caches pick up the new data:
+
+```bash
+docker compose restart backend
+```
 
 Manual ingest only:
 
@@ -356,7 +385,9 @@ partselect-agent/
 ├── backend/
 │   ├── app/
 │   │   ├── agent/
-│   │   │   ├── router.py           # LLM intent classifier
+│   │   │   ├── router.py           # LLM intent classifier (incl. browse_all_parts)
+│   │   │   ├── catalog.py          # CatalogScope + source precedence policy
+│   │   │   ├── catalog_sources.py  # DB / live fetch implementations
 │   │   │   ├── guardrails.py       # Scope + intent–tool map
 │   │   │   ├── part_context.py     # Session PS / name resolution
 │   │   │   ├── troubleshoot_handler.py  # RAG + synthesis + footer
@@ -367,8 +398,10 @@ partselect-agent/
 │   │   ├── routers/chat.py         # Intent → handler dispatch
 │   │   ├── services/               # session, cart, chat history
 │   │   └── rag/                    # embedder + ingest
-│   ├── scrapers/                   # Selenium pipeline + Firecrawl runtime
+│   ├── scrapers/                   # Selenium pipeline + runtime fetch
 │   │   ├── run_collection.py       # Stage orchestrator CLI
+│   │   ├── merge_catalog.py        # Incremental merge + refresh-db
+│   │   ├── runtime_fetch.py        # Selenium (default) or Firecrawl live scrape
 │   │   └── product_utils.py        # Shared URL/price parsing
 │   └── tests/
 └── frontend/
@@ -385,9 +418,17 @@ synthesis_model = "deepseek/deepseek-v4-pro"   # troubleshoot + agent
 tool_temperature = 0.0
 synthesis_temperature = 0.3
 
+[catalog]
+filtered_catalog_limit = 20
+full_catalog_limit = 40
+full_catalog_primary_source = "live"   # db | live | none
+db_completeness_min_parts = 5          # min DB rows before trusting full-catalog DB
+
 [retrieval]
 top_k = 7
 ```
+
+Runtime live scrape backend is controlled via env (not `config.toml`): `LIVE_SCRAPE_BACKEND=selenium` (default) or `firecrawl`.
 
 ---
 
@@ -401,7 +442,9 @@ top_k = 7
 
 **RAG troubleshoot with guardrails:** Retrieved repair guides and articles constrain the synthesis prompt; a fixed footer always points users to PartSelect Repair and Instant Repairman.
 
-**Hybrid data + live enrichment:** JSONL bulk ingest plus Firecrawl/Selenium refresh for missing or stale prices. `part_enrichment.py` validates parts, refreshes prices from product URLs, and filters "Page Not Found" junk.
+**Hybrid data + live enrichment:** JSONL bulk ingest plus Selenium (default) or Firecrawl refresh for missing catalog rows, stale prices, and incomplete model listings. `catalog.py` applies explicit scope and completeness thresholds so partial DB ingests do not mask live results. `part_enrichment.py` validates parts, refreshes prices from product URLs, and filters "Page Not Found" junk.
+
+**Incremental scrape + merge:** Bulk pipeline checkpoints per URL; `merge_catalog.py` overlays partial `details`/`enrich` work onto `parts.jsonl` without a full re-scrape, preserving enrichment fields when fresh rows are thinner.
 
 **pgvector HNSW:** 384-dim MiniLM embeddings; cosine search over `repair` and `article` sources in the `embeddings` table.
 
