@@ -75,6 +75,14 @@
     "expect": { "min_parts": 1, "source": "db" }
   },
   {
+    "id": "model_persisted_across_turns",
+    "sequence": [
+      { "message": "find a water filter", "expect": { "text_contains": "model number" } },
+      { "message": "10650502990", "expect": { "min_parts": 1 } },
+      { "message": "find compatible ice maker parts", "expect": { "has_text": true, "min_parts": 0 } }
+    ]
+  },
+  {
     "id": "list_compat_unknown_model_referral",
     "message": "What parts fit model WRS0000000?",
     "expect": { "text_contains": "partselect.com/Models/WRS0000000" }

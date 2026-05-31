@@ -67,6 +67,13 @@ async def chat(req: ChatRequest):
     message = req.message.strip()
     latest = routing_query(message)
     appliance_model = _resolve_model(latest, req.appliance_model, session)
+
+    # If the user typed a model number in their message, remember it for future turns
+    _model_in_msg = extract_model_number(latest)
+    if _model_in_msg and (not session or session.get("appliance_model") != _model_in_msg):
+        set_appliance_model(session_id, _model_in_msg)
+        session = get_session(session_id)
+
     rid = new_request_id()
     log.info("req=%s intent_msg=%r model=%r", rid, latest[:60], appliance_model or "")
 
