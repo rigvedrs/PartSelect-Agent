@@ -107,6 +107,49 @@ DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backend \
   uvicorn app.main:app --reload --port 8000
 ```
 
+### Scraping pipeline (Selenium)
+
+Requires Google Chrome and network access. Installs matching ChromeDriver via `webdriver-manager`.
+
+```bash
+conda activate instalily
+pip install -r backend/requirements.txt
+
+# Full pipeline: catalog → product details → enrich → repairs → articles → export
+cd partselect-agent
+PYTHONPATH=backend python -m scrapers.run_collection --stage all --backup
+
+# Individual stages
+PYTHONPATH=backend python -m scrapers.run_collection --stage repairs
+PYTHONPATH=backend python -m scrapers.run_collection --stage articles
+PYTHONPATH=backend python -m scrapers.run_collection --stage catalog
+PYTHONPATH=backend python -m scrapers.run_collection --stage details --limit 100  # smoke test
+PYTHONPATH=backend python -m scrapers.run_collection --stage enrich
+PYTHONPATH=backend python -m scrapers.run_collection --stage export
+
+# Verify scraped samples against existing JSONL baselines
+PYTHONPATH=backend python -m scrapers.verify_output --samples 10
+
+# Audit cross-reference completeness (checks for legacy 30-row truncation)
+PYTHONPATH=backend python -m scrapers.verify_output --audit
+# Exits 0 if max cross-ref count > 30 (cap removed); exits 1 if still truncated
+```
+
+**Data completeness note:** The original baseline `parts.jsonl` caps `model_cross_reference` at exactly 30 rows per part (1,551 parts hit this ceiling). The new Selenium `compat_enricher` clicks "Load more" until exhausted — no cap — so a full fresh scrape will produce complete compatibility lists. Run `--audit` to verify completeness after a scrape.
+
+Intermediate files live under `backend/data/scrape_work/`. Final exports overwrite `backend/data/raw/{parts,repairs,articles}.jsonl` (previous files copied to `backend/data/raw/_backup/` when using `--backup`).
+
+Re-ingest after a fresh scrape:
+
+```bash
+FORCE_REINGEST=1 DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backend \
+  python -m app.rag.ingest
+```
+
+Docker: set `FORCE_REINGEST=1` in `.env` before `docker compose up` to reload JSONL on startup.
+
+Runtime Firecrawl fallback (`scrapers.parts_scraper.scrape_and_parse`) is unchanged and independent of this pipeline.
+
 ### Frontend
 
 ```bash
@@ -116,6 +159,30 @@ npm install
 REACT_APP_API_URL=http://localhost:8000 npm start
 # Opens at http://localhost:3000
 ```
+
+---
+
+## Observability
+
+The backend logs one structured line per request stage to stdout, visible via:
+
+```bash
+docker compose logs -f backend
+```
+
+Each log line includes a short `req=<id>` prefix so you can trace a single request end-to-end. Key log events:
+
+| Logger | What it reports |
+|--------|----------------|
+| `routers.chat` | Intent classified, model source (message / session / pending slot), handler invoked |
+| `tools.list_compatible_parts` | DB hit count, live-scrape fallback trigger + part count |
+| `tools.check_compatibility` | Live-confirmed compat (with `ps=` and `model=`) |
+| `scrapers.model_lookup` | Model page scrape outcome, PS numbers found |
+| `agent.graph` | Empty-text warning, full exception traceback on LLM/tool failure |
+
+**Log level:** Set `LOG_LEVEL=DEBUG` in `.env` for verbose output; default is `INFO`.
+
+**Fallback chain decisions** — when local DB returns nothing, the agent tries a live Firecrawl scrape and tags the result `source: "live"` in the response. On failure it returns a graceful referral URL. Both decisions are logged so you can see exactly why a fallback fired.
 
 ---
 
