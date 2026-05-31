@@ -13,6 +13,7 @@ _QUERY_STOP = frozenset({
     "the", "a", "an", "how", "do", "can", "you", "tell", "me", "about",
     "well", "too", "also", "there", "its", "same", "all", "as", "just", "even",
     "one", "some", "any", "other", "else", "then", "when", "that", "this",
+    "fridge", "refrigerator", "freezer", "dishwasher", "appliance",
 })
 
 
@@ -106,25 +107,26 @@ def list_compatible_parts(
             "reason": f"Found {len(parts)} part(s) verified compatible with {model}.",
         }
 
-    # Live fallback: scrape the model page, hydrate any PS numbers we can
-    from scrapers.model_lookup import scrape_model_part_numbers
-    from app.agent.tools.search_parts import search_parts
-    ps_numbers = scrape_model_part_numbers(model, part_query)
+    # Live fallback: parse product links from the model page (not blind PS regex)
+    from scrapers.model_lookup import scrape_model_parts
+    from app.agent.tools.search_parts import get_part_by_ps
+
+    entries = scrape_model_parts(
+        model,
+        part_query if _part_type_keywords(part_query or "") else None,
+    )
     live_parts: list[dict] = []
-    for ps in ps_numbers[:50]:
-        hit = search_parts(ps)
-        live_parts.extend(hit)
-    if part_query and part_query.strip() and live_parts:
-        kws = (_part_type_keywords(part_query) or "").split()
-        if kws:
-            live_parts = _filter_by_keywords(live_parts, kws)
+    for entry in entries[:limit]:
+        row = get_part_by_ps(entry["ps_number"], fallback=entry)
+        if row:
+            live_parts.append(row)
     if live_parts:
         log.info("list_compatible live model=%s parts=%d", model, len(live_parts))
         return {
-            "model_number": model, "parts": live_parts[:limit], "count": len(live_parts[:limit]),
+            "model_number": model, "parts": live_parts, "count": len(live_parts),
             "source": "live",
             "reason": (
-                f"Found {len(live_parts[:limit])} part(s) for {model} from a live PartSelect "
+                f"Found {len(live_parts)} part(s) for {model} from a live PartSelect "
                 "lookup — please confirm fit before ordering."
             ),
         }

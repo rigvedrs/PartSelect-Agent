@@ -2,6 +2,7 @@ import os
 import re
 from sqlalchemy import text
 from app.db.engine import get_engine
+from app.agent.tools.part_validation import is_valid_part
 
 _PS_RE = re.compile(r"PS\d+", re.IGNORECASE)
 
@@ -10,6 +11,8 @@ _STOP_WORDS = frozenset({
     "for", "my", "i", "need", "want", "have", "is", "what", "where", "how",
     "do", "can", "will", "please", "help", "some", "any", "in", "on", "of",
     "with", "and", "or", "it", "this", "that", "buy", "order",
+    "fridge", "refrigerator", "freezer", "dishwasher", "appliance",
+    "well", "too", "also", "all", "its", "list", "part", "parts",
 })
 
 
@@ -37,6 +40,8 @@ def _firecrawl_fallback(ps_number: str) -> list[dict]:
             return []
 
         p = reshape_part(raw)
+        if not is_valid_part({"ps_number": p["ps_number"], "name": p["name"]}):
+            return []
         p.setdefault("video_url", None)
 
         engine = get_engine()
@@ -53,6 +58,35 @@ def _firecrawl_fallback(ps_number: str) -> list[dict]:
         return []
 
 
+def get_part_by_ps(ps_number: str, fallback: dict | None = None) -> dict | None:
+    """Load a part by PS number. Skips invalid cached rows; optional model-page fallback."""
+    ps = ps_number.upper()
+    engine = get_engine()
+    with engine.connect() as conn:
+        row = conn.execute(
+            text("SELECT * FROM parts WHERE ps_number = :ps"),
+            {"ps": ps},
+        ).mappings().first()
+    if row and is_valid_part(dict(row)):
+        return dict(row)
+    fresh = _firecrawl_fallback(ps)
+    if fresh and is_valid_part(fresh[0]):
+        return fresh[0]
+    if fallback and fallback.get("name"):
+        return {
+            "ps_number": ps,
+            "name": fallback["name"],
+            "product_url": fallback.get("product_url"),
+            "price": None,
+            "stock_status": None,
+            "brand": None,
+            "image_url": None,
+            "description": None,
+            "category": None,
+        }
+    return None
+
+
 def search_parts(query: str, category: str | None = None) -> list[dict]:
     """Return up to 5 parts matching the query. Exact PS# match first,
     then text search, then Firecrawl live fallback for unknown PS numbers."""
@@ -65,7 +99,7 @@ def search_parts(query: str, category: str | None = None) -> list[dict]:
                 text("SELECT * FROM parts WHERE ps_number = :ps"),
                 {"ps": ps}
             ).mappings().first()
-            if row:
+            if row and is_valid_part(dict(row)):
                 return [dict(row)]
             return _firecrawl_fallback(ps)
 

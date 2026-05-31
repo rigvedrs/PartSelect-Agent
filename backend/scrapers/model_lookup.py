@@ -9,6 +9,10 @@ log = get_logger("scrapers.model_lookup")
 
 _PS_RE = re.compile(r"PS\d{5,}", re.IGNORECASE)
 _MODEL_URL = "https://www.partselect.com/Models/{model}/"
+_URL_PS_RE = re.compile(
+    r"\((https?://(?:www\.)?partselect\.com/(PS\d+)[^)]*)\)",
+    re.IGNORECASE,
+)
 
 
 def model_page_url(model: str) -> str:
@@ -22,10 +26,21 @@ def _query_keywords(part_query: str | None) -> list[str]:
     return [w for w in _extract_keywords(part_query).split() if len(w) > 2]
 
 
-def scrape_model_part_numbers(model: str, part_query: str | None = None) -> list[str]:
-    """Return distinct PS numbers found on a model page. Empty list on any failure.
+def _filter_entries(entries: list[dict], kws: list[str]) -> list[dict]:
+    if not kws:
+        return entries
+    names = [(e, e["name"].lower()) for e in entries]
+    and_hits = [e for e, n in names if all(k in n for k in kws)]
+    if and_hits:
+        return and_hits
+    or_hits = [e for e, n in names if any(k in n for k in kws)]
+    return or_hits
 
-    When part_query is given, PS numbers on lines matching those keywords are returned first.
+
+def scrape_model_parts(model: str, part_query: str | None = None) -> list[dict]:
+    """Return parts listed on a model page as {ps_number, name, product_url}.
+
+    Parses markdown product links only — avoids stray PS numbers from page chrome.
     """
     if not os.getenv("FIRECRAWL_API_KEY"):
         return []
@@ -37,42 +52,49 @@ def scrape_model_part_numbers(model: str, part_query: str | None = None) -> list
         return []
     if not md:
         return []
+
+    entries: list[dict] = []
     seen: set[str] = set()
-    all_ps: list[str] = []
-    for m in _PS_RE.finditer(md):
-        ps = m.group(0).upper()
-        if ps not in seen:
-            seen.add(ps)
-            all_ps.append(ps)
+    for line in md.splitlines():
+        url_m = _URL_PS_RE.search(line)
+        if not url_m:
+            continue
+        name_m = re.search(r"!\[([^\]]+)\]", line)
+        if not name_m:
+            continue
+        name = name_m.group(1).strip()
+        if not name or "base64" in name.lower():
+            continue
+        ps = url_m.group(2).upper()
+        if ps in seen:
+            continue
+        seen.add(ps)
+        entries.append({
+            "ps_number": ps,
+            "name": name,
+            "product_url": url_m.group(1),
+        })
 
     kws = _query_keywords(part_query)
-    if not kws:
-        log.info("model_lookup model=%s found_ps=%d", model, len(all_ps))
-        return all_ps
+    if kws:
+        filtered = _filter_entries(entries, kws)
+        log.info(
+            "model_lookup model=%s keyword=%r hits=%d/%d",
+            model, kws, len(filtered), len(entries),
+        )
+        return filtered
 
-    prioritized: list[str] = []
-    prio_seen: set[str] = set()
-    for line in md.splitlines():
-        ll = line.lower()
-        if not any(k in ll for k in kws):
-            continue
-        for m in _PS_RE.finditer(line):
-            ps = m.group(0).upper()
-            if ps not in prio_seen:
-                prio_seen.add(ps)
-                prioritized.append(ps)
+    log.info("model_lookup model=%s parts=%d", model, len(entries))
+    return entries
 
-    if prioritized:
-        combined = prioritized + [ps for ps in all_ps if ps not in prio_seen]
-        log.info("model_lookup model=%s keyword_hits=%d total=%d", model, len(prioritized), len(combined))
-        return combined
 
-    log.info("model_lookup model=%s found_ps=%d (no keyword lines)", model, len(all_ps))
-    return all_ps
+def scrape_model_part_numbers(model: str, part_query: str | None = None) -> list[str]:
+    """PS numbers from model page product links (legacy helper)."""
+    return [e["ps_number"] for e in scrape_model_parts(model, part_query)]
 
 
 def model_lists_part(model: str, ps_number: str) -> bool | None:
-    """True/False if the model page lists the PS number; None if lookup unavailable/failed."""
+    """True/False if the model page lists the PS number; None if lookup unavailable."""
     found = scrape_model_part_numbers(model)
     if not found:
         return None

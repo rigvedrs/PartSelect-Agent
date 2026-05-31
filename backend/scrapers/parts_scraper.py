@@ -57,9 +57,13 @@ def scrape_and_parse(ps_number: str) -> dict | None:
         ps = f"PS{ps}"
     try:
         md = scrape_markdown(URL_TMPL.format(ps=ps))
-        if not md:
+        if not md or "page not found" in md.lower()[:800]:
             return None
-        return parse_product(ps, md)
+        record = parse_product(ps, md)
+        name = (record.get("name") or "").lower()
+        if "page not found" in name:
+            return None
+        return record
     except Exception:
         return None
 
