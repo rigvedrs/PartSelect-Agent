@@ -11,6 +11,9 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from app.agent.llm_provider import get_llm
+from app.observability import get_logger
+
+log = get_logger("agent.graph")
 from app.agent.tools.search_parts import search_parts
 from app.agent.tools.check_compatibility import check_compatibility
 from app.agent.tools.list_compatible_parts import list_compatible_parts
@@ -127,7 +130,12 @@ async def run_agent_streaming(
     if appliance_model and appliance_model.strip():
         content = f"[My appliance model: {appliance_model.strip()}]\n{message}"
     user_msg = HumanMessage(content=content)
-    result = await graph.ainvoke({"messages": history + [user_msg]})
+    try:
+        result = await graph.ainvoke({"messages": history + [user_msg]})
+    except Exception:
+        log.exception("agent.invoke failed session=%s", session_id)
+        yield "Sorry, something went wrong while processing that. Please try rephrasing your question."
+        return
     final_msg = result["messages"][-1]
     text = getattr(final_msg, "content", str(final_msg))
     if isinstance(text, list):
@@ -135,6 +143,8 @@ async def run_agent_streaming(
             block.get("text", "") if isinstance(block, dict) else str(block)
             for block in text
         )
+    if not text.strip():
+        log.warning("agent returned empty text session=%s", session_id)
     chunk_size = 20
     for i in range(0, len(text), chunk_size):
         yield text[i:i + chunk_size]
