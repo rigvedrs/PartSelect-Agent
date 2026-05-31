@@ -11,9 +11,6 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from app.agent.llm_provider import get_llm
-from app.observability import get_logger
-
-log = get_logger("agent.graph")
 from app.agent.tools.search_parts import search_parts
 from app.agent.tools.check_compatibility import check_compatibility
 from app.agent.tools.list_compatible_parts import list_compatible_parts
@@ -21,6 +18,9 @@ from app.agent.tools.get_installation import get_installation_guide
 from app.agent.tools.troubleshoot import troubleshoot_symptom
 from app.agent.tools.add_to_cart import add_to_cart as _add_to_cart
 from app.agent.tools.remove_from_cart import remove_from_cart as _remove_from_cart
+from app.observability import get_logger
+
+log = get_logger("agent.graph")
 
 SYSTEM_PROMPT = """You are a specialized AI assistant for PartSelect, an appliance parts e-commerce platform.
 
