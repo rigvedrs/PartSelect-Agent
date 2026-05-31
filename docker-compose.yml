@@ -39,6 +39,7 @@ services:
       - ./backend/data:/app/data
       - ./config.toml:/app/config.toml
       - ./backend/app:/app/app
+      - ./backend/scrapers:/app/scrapers
 
   frontend:
     build: ./frontend
@@ -46,6 +47,10 @@ services:
       - "3000:3000"
     environment:
       REACT_APP_API_URL: http://localhost:8000
+      CHOKIDAR_USEPOLLING: "true"
+      WATCHPACK_POLLING: "true"
+    volumes:
+      - ./frontend/src:/app/src
     depends_on:
       - backend
 

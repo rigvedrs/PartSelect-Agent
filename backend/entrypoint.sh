@@ -6,6 +6,9 @@ until pg_isready -h "${DB_HOST:-postgres}" -p 5432 -U "${DB_USER:-partselect}" >
   sleep 1
 done
 echo "Postgres ready. Running ingestion..."
+if [ "${FORCE_REINGEST:-}" = "1" ]; then
+  export FORCE_REINGEST=1
+fi
 python -m app.rag.ingest
 echo "Ingestion done. Starting API..."
 RELOAD_ARGS=""

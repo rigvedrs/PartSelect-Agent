@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from sqlalchemy import text
 from sqlalchemy.engine import Engine
@@ -143,9 +144,16 @@ def run_ingestion(engine: Engine | None = None) -> dict:
     with engine.begin() as conn:
         prune_legacy_seed_compat(conn)
         prune_mismatched_compat(conn)
+        force = os.environ.get("FORCE_REINGEST", "").strip().lower() in ("1", "true", "yes")
         already = conn.execute(text("SELECT COUNT(*) FROM parts")).scalar()
-        if already and already > 0:
+        if already and already > 0 and not force:
             return {"skipped": True, "parts": already}
+        if force:
+            conn.execute(text("DELETE FROM embeddings WHERE source_type IN ('repair', 'article')"))
+            conn.execute(text("DELETE FROM compatibility"))
+            conn.execute(text("DELETE FROM parts"))
+            conn.execute(text("DELETE FROM repair_guides"))
+            conn.execute(text("DELETE FROM articles"))
         parts = ingest_parts(conn)
         repairs = ingest_repairs(conn)
         articles = ingest_articles(conn)
