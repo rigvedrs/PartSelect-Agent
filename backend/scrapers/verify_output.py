@@ -8,6 +8,7 @@ from typing import Any
 
 from scrapers import browser, io_utils
 from scrapers import compat_enricher, detail_extractor
+from scrapers.product_utils import clean_product_url
 
 
 def _norm_price(v: Any) -> float | None:
@@ -54,7 +55,7 @@ def verify_parts(samples: int, seed: int) -> dict[str, Any]:
             old = by_ps.get(ps)
             if not old:
                 continue
-            url = old.get("product_url") or detail_extractor.ps_url_from_number(ps)
+            url = clean_product_url(old.get("product_url")) or detail_extractor.ps_url_from_number(ps)
             detail = detail_extractor.extract_product_record(driver, url)
             fresh = compat_enricher.enrich_record(driver, detail)
             checks = _compare_part(old, fresh)
