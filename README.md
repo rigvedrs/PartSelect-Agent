@@ -10,42 +10,120 @@ A conversational AI agent for PartSelect's e-commerce platform, specializing in 
 User ──► React Chat Widget (port 3000)
               │
               ▼
-        FastAPI /api/chat (port 8000)
+        FastAPI POST /api/chat (port 8000)
               │
       ┌───────▼────────┐
-      │  Scope Guardrail│  keyword check — rejects off-topic
+      │  Scope guardrail│  keyword check — rejects clearly off-topic queries
       └───────┬─────────┘
               │
-      ┌───────▼────────┐
-      │  Intent Router  │  INSTALL/COMPAT/SEARCH/CART → direct SQL
-      └───────┬─────────┘  TROUBLESHOOT/COMPLEX → LangGraph agent
+      ┌───────▼────────────────────────┐
+      │  LLM intent classifier       │  deepseek-v4-flash, structured output
+      │  (single call per message)   │
+      └───────┬────────────────────────┘
               │
-     ┌────────┴──────────┐
-     │                   │
-     ▼                   ▼
-Direct Tool Response  LangGraph ReAct Agent
-(no LLM needed)       (DeepSeek via OpenRouter)
-                           │
-                      5 Tools:
-                      ├── search_parts        (SQL + Firecrawl fallback)
-                      ├── check_compatibility  (deterministic SQL)
-                      ├── get_installation    (SQL)
-                      ├── troubleshoot_symptom (pgvector semantic search)
-                      └── add_to_cart         (SQL)
+     ┌────────┴────────────────────────────────────────────┐
+     │ Deterministic handlers (no LangGraph)                 │
+     │  INSTALL · COMPAT · SEARCH · PARTS_FOR_MODEL        │
+     │  ADD/REMOVE_CART · GREETING · TROUBLESHOOT            │
+     └────────┬────────────────────────────────────────────┘
+              │
+     ┌────────┴──────────┬──────────────────────┐
+     ▼                   ▼                      ▼
+ SQL / Firecrawl    RAG + synthesis LLM    LangGraph ReAct
+ tools              (troubleshoot only)    (GENERAL intent only)
+     │                   │                      │
+     │              pgvector retrieval          │ deepseek-v4-pro
+     │              repair_guides + articles    │ search · compat · install
+     └───────────────────┴──────────────────────┘
 ```
 
-**Data:** PostgreSQL 16 + pgvector HNSW index for semantic search. Embeddings generated locally via `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions). ~2,100 refrigerator/dishwasher parts pre-ingested from JSONL.
+**Data:** PostgreSQL 16 + pgvector HNSW index for semantic search. Embeddings generated locally via `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions). Parts, compatibility, repair guides, and articles are ingested from JSONL under `backend/data/raw/`.
 
-**Phase 2 fallback:** When a PS number is not in the database, `search_parts` triggers a live Firecrawl scrape, ingests the result on-the-fly, and returns it — all within the same request (requires `FIRECRAWL_API_KEY`).
+**Live fallback:** When a PS number or model page is not in the database, tools trigger Firecrawl scraping, upsert results, and return them in the same request (requires `FIRECRAWL_API_KEY`).
+
+---
+
+## Request flow
+
+Every chat message goes through the same pipeline:
+
+1. **Scope check** — reject only when the message has zero appliance keywords *and* contains a known off-of-scope keyword.
+2. **Intent classification** — one structured LLM call (`deepseek/deepseek-v4-flash`) returns intent, optional `part_query`, and optional `ps_number`.
+3. **Cart intent reconciliation** — verb-based override (`add` / `remove`) corrects misclassified cart intents.
+4. **PS resolution** — for cart actions, resolve the target part in priority order: explicit PS in message → pronoun reference to **latest** shown batch → name match in session history → classifier PS.
+5. **Handler** — run the matching deterministic handler or, for `general` only, stream through the LangGraph agent.
+
+Handlers record exchanges in `session_messages` and update `last_parts_json` whenever parts are returned, so follow-up turns ("add it", "remove that filter") stay grounded in what the user actually saw.
+
+---
+
+## Intent routing
+
+| Intent | Handler | LLM used? |
+|--------|---------|-----------|
+| `greeting` | Static welcome | No |
+| `search` | Model-first `list_compatible_parts` or PS lookup | No |
+| `parts_for_model` | Compatible parts for session model | No |
+| `compatibility` | `check_compatibility` or model-scoped search | No |
+| `install` | `get_installation_guide` | No |
+| `troubleshoot` | RAG retrieval + pro synthesis + resource footer | Yes (synthesis only) |
+| `add_to_cart` / `remove_from_cart` | Cart tools + session PS resolution | No |
+| `general` | LangGraph ReAct agent (no cart tools) | Yes (pro) |
+
+**Pending slots:** If the user searches for a part type without a model number, the session stores `pending_intent` + `pending_part_query`. The next message that includes a model clears the slot and completes the search.
+
+**Intent–tool guardrails:** Each intent maps to an allowed tool set (`guardrails.py`). Handlers call `assert_tool_allowed()` before cart mutations. The LangGraph agent does not expose cart tools — cart changes always go through the deterministic router.
+
+---
+
+## Session state
+
+Stored per session in PostgreSQL:
+
+| Field | Purpose |
+|-------|---------|
+| `appliance_model` | Persisted model number from chat or the UI field |
+| `pending_intent` / `pending_part_query` | Multi-turn search when model was missing |
+| `last_parts_json` | `{ "latest": [...], "history": [...] }` — parts shown to the user |
+
+- **`latest`** — most recent batch of parts (used for "add it" / "that one").
+- **`history`** — rolling window (max 20) for name-based cart resolution ("add the water filter").
+
+---
+
+## Troubleshooting (RAG)
+
+`Intent.TROUBLESHOOT` does **not** use the LangGraph agent. Instead:
+
+1. Detect appliance type from the message (`dishwasher` vs `refrigerator`).
+2. Embed the symptom and retrieve top repair guides + articles via pgvector (`app/agent/tools/troubleshoot.py`).
+3. Synthesize a concise answer with `deepseek/deepseek-v4-pro` using only retrieved context (`app/agent/troubleshoot_handler.py`).
+4. Append the PartSelect resource footer (Repair hub + Instant Repairman links).
+
+Related parts from repair-guide matches are returned in the `parts` field when found in the catalog.
+
+---
+
+## LLM configuration
+
+Two models, configured in `config.toml`:
+
+| Role | Model | Used for |
+|------|-------|----------|
+| Classifier (`tool_model`) | `deepseek/deepseek-v4-flash` | Intent routing, structured output, `temperature=0` |
+| Synthesis (`synthesis_model`) | `deepseek/deepseek-v4-pro` | Troubleshoot answers, LangGraph agent |
+
+Switch providers by changing `base_url`, `api_key_env_var`, and model slugs — no code changes required.
 
 ---
 
 ## Prerequisites
 
 - [Docker Desktop](https://www.docker.com/products/docker-desktop/) — required for Postgres + Redis
-- **OpenRouter API key** — required for LLM responses (troubleshoot / complex queries). Get one at [openrouter.ai](https://openrouter.ai)
+- **OpenRouter API key** — required for intent classification, troubleshoot synthesis, and `general` agent turns. Get one at [openrouter.ai](https://openrouter.ai)
 - **Firecrawl API key** — optional, enables live scraping for unknown PS numbers. Get one at [firecrawl.dev](https://firecrawl.dev)
 - For local dev without Docker: Python 3.11 via conda, Node.js 22.12.0 via [asdf](https://asdf-vm.com)
+- For bulk scraping: Google Chrome (Selenium + `webdriver-manager`)
 
 ---
 
@@ -67,45 +145,43 @@ docker compose up -d
 open http://localhost:3000
 ```
 
-The first startup downloads the embedding model (~90 MB) and ingests ~2,100 parts — takes about 60 seconds. Subsequent starts are instant.
+The first startup downloads the embedding model (~90 MB) and ingests JSONL data — takes about 60 seconds. Subsequent starts are instant unless `FORCE_REINGEST=1` is set.
 
 ---
 
-## Example Queries
-
-These three queries are guaranteed to work and demonstrate the full agent:
+## Example queries
 
 | # | Query | How it's handled |
 |---|-------|-----------------|
-| 1 | `How can I install part number PS11752778?` | Deterministic SQL → numbered installation steps (no LLM) |
-| 2 | `Is PS11752778 compatible with my WDT780SAEM1 model?` | Deterministic SQL → compatibility badge (no LLM) |
-| 3 | `My ice maker is not working` | LangGraph agent → pgvector search → part recommendations |
+| 1 | `How can I install part number PS11752778?` | Deterministic SQL → installation steps (no LangGraph) |
+| 2 | `Is PS11752778 compatible with my WDT780SAEM1 model?` | Deterministic SQL → compatibility result |
+| 3 | `My ice maker is not working` | RAG over repair guides + articles → pro synthesis → resource footer |
+| 4 | `find a water filter for my fridge` then `add it` | Model-first search → session `latest` → contextual cart add |
 
-Queries 1 and 2 do not require an API key. Query 3 requires `OPENROUTER_API_KEY`.
+Queries 1–2 work without an API key for the data layer; intent classification and query 3+ require `OPENROUTER_API_KEY`.
 
 ---
 
-## Local Development
+## Local development
 
 ### Backend
 
 ```bash
-# Create and activate conda env
 conda create -n instalily python=3.11 -y
 conda activate instalily
 pip install -r backend/requirements.txt
 
-# Start infrastructure
 docker compose up -d postgres redis
 
-# Run ingestion (first time only)
+# First-time ingest (from repo root; JSONL must exist under backend/data/raw/)
 DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backend \
   python -m app.rag.ingest
 
-# Start API server
-DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backend \
-  uvicorn app.main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000
+# Run from backend/ with DB_HOST=localhost in the environment, or use docker compose backend service
 ```
+
+When running ingest or pytest **on the host** (not inside Docker), always set `DB_HOST=localhost`. Inside containers, `config.toml` defaults to `DB_HOST=postgres`.
 
 ### Scraping pipeline (Selenium)
 
@@ -113,31 +189,40 @@ Requires Google Chrome and network access. Installs matching ChromeDriver via `w
 
 ```bash
 conda activate instalily
-pip install -r backend/requirements.txt
+cd partselect-agent
 
 # Full pipeline: catalog → product details → enrich → repairs → articles → export
-cd partselect-agent
 PYTHONPATH=backend python -m scrapers.run_collection --stage all --backup
 
 # Individual stages
 PYTHONPATH=backend python -m scrapers.run_collection --stage repairs
 PYTHONPATH=backend python -m scrapers.run_collection --stage articles
 PYTHONPATH=backend python -m scrapers.run_collection --stage catalog
-PYTHONPATH=backend python -m scrapers.run_collection --stage details --limit 100  # smoke test
+PYTHONPATH=backend python -m scrapers.run_collection --stage details --limit 100   # smoke test
 PYTHONPATH=backend python -m scrapers.run_collection --stage enrich
 PYTHONPATH=backend python -m scrapers.run_collection --stage export
 
 # Verify scraped samples against existing JSONL baselines
 PYTHONPATH=backend python -m scrapers.verify_output --samples 10
 
-# Audit cross-reference completeness (checks for legacy 30-row truncation)
+# Audit cross-reference completeness (detects legacy 30-row truncation)
 PYTHONPATH=backend python -m scrapers.verify_output --audit
-# Exits 0 if max cross-ref count > 30 (cap removed); exits 1 if still truncated
 ```
 
-**Data completeness note:** The original baseline `parts.jsonl` caps `model_cross_reference` at exactly 30 rows per part (1,551 parts hit this ceiling). The new Selenium `compat_enricher` clicks "Load more" until exhausted — no cap — so a full fresh scrape will produce complete compatibility lists. Run `--audit` to verify completeness after a scrape.
+**Stages:**
 
-Intermediate files live under `backend/data/scrape_work/`. Final exports overwrite `backend/data/raw/{parts,repairs,articles}.jsonl` (previous files copied to `backend/data/raw/_backup/` when using `--backup`).
+| Stage | Module | Output |
+|-------|--------|--------|
+| `catalog` | `catalog_crawler.py` | Product URLs by category |
+| `details` | `detail_extractor.py` | Per-product JSONL (price, name, symptoms) |
+| `enrich` | `compat_enricher.py` | Model cross-references (clicks "Load more", no 30-row cap) |
+| `repairs` | `repair_guides.py` | Symptom → part repair rows |
+| `articles` | `article_collector.py` | Blog / how-to articles |
+| `export` | `run_collection.py` | Copies work files → `backend/data/raw/*.jsonl` |
+
+Intermediate files live under `backend/data/scrape_work/` (gitignored). Final exports overwrite `backend/data/raw/{parts,repairs,articles}.jsonl` (previous files copied to `backend/data/raw/_backup/` when using `--backup`).
+
+**Shared price parsing:** `scrapers/product_utils.py` (`parse_product_price`, `clean_product_url`) is used by the bulk pipeline and runtime enrichment so chat/cart prices match PartSelect product pages.
 
 Re-ingest after a fresh scrape:
 
@@ -146,9 +231,7 @@ FORCE_REINGEST=1 DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backe
   python -m app.rag.ingest
 ```
 
-Docker: set `FORCE_REINGEST=1` in `.env` before `docker compose up` to reload JSONL on startup.
-
-Runtime Firecrawl fallback (`scrapers.parts_scraper.scrape_and_parse`) is unchanged and independent of this pipeline.
+Runtime Firecrawl fallback (`scrapers/parts_scraper.py`) is independent of the Selenium pipeline.
 
 ### Frontend
 
@@ -157,163 +240,151 @@ cd frontend
 asdf shell nodejs 22.12.0
 npm install
 REACT_APP_API_URL=http://localhost:8000 npm start
-# Opens at http://localhost:3000
 ```
 
 ---
 
 ## Observability
 
-The backend logs one structured line per request stage to stdout, visible via:
-
 ```bash
 docker compose logs -f backend
 ```
 
-Each log line includes a short `req=<id>` prefix so you can trace a single request end-to-end. Key log events:
+Each log line includes `req=<id>` for end-to-end tracing:
 
 | Logger | What it reports |
 |--------|----------------|
-| `routers.chat` | Intent classified, model source (message / session / pending slot), handler invoked |
-| `tools.list_compatible_parts` | DB hit count, live-scrape fallback trigger + part count |
-| `tools.check_compatibility` | Live-confirmed compat (with `ps=` and `model=`) |
-| `scrapers.model_lookup` | Model page scrape outcome, PS numbers found |
-| `agent.graph` | Empty-text warning, full exception traceback on LLM/tool failure |
+| `routers.chat` | Intent, model source, handler path |
+| `agent.router` | Classification result |
+| `agent.troubleshoot` | RAG hit counts (causes, articles, parts) |
+| `agent.graph` | Empty-text warnings, LLM/tool exceptions |
+| `tools.list_compatible_parts` | DB hits, live-scrape fallback |
+| `scrapers.model_lookup` | Model page scrape outcomes |
 
-**Log level:** Set `LOG_LEVEL=DEBUG` in `.env` for verbose output; default is `INFO`.
-
-**Fallback chain decisions** — when local DB returns nothing, the agent tries a live Firecrawl scrape and tags the result `source: "live"` in the response. On failure it returns a graceful referral URL. Both decisions are logged so you can see exactly why a fallback fired.
+Set `LOG_LEVEL=DEBUG` in `.env` for verbose output.
 
 ---
 
-## Running Tests
+## Running tests
 
 ```bash
 conda activate instalily
 cd partselect-agent
 
-# Unit tests (no DB required — 40+ tests)
+# Unit tests (no DB / no API key for most)
 PYTHONPATH=backend pytest backend/tests/ \
   --ignore=backend/tests/test_ingest_integration.py \
-  --ignore=backend/tests/test_api_integration.py -v
+  --ignore=backend/tests/test_api_integration.py \
+  --ignore=backend/tests/test_chat_scenarios.py -v
 
-# API integration tests (requires running Postgres via docker compose up -d postgres)
-TEST_DATABASE_URL=postgresql+psycopg://partselect:partselect@localhost:5432/partselect \
-  DB_HOST=localhost POSTGRES_PASSWORD=partselect \
-  PYTHONPATH=backend pytest backend/tests/ -v
+# API integration + scenarios (requires Postgres)
+docker compose up -d postgres
+DB_HOST=localhost POSTGRES_PASSWORD=partselect OPENROUTER_API_KEY=<key> \
+  PYTHONPATH=backend pytest backend/tests/test_api_integration.py \
+  backend/tests/test_chat_scenarios.py -v
 ```
+
+Router live tests and some scenario cases require `OPENROUTER_API_KEY`.
 
 ---
 
-## API Reference
+## API reference
 
 ### `POST /api/chat`
 
 ```json
 {
-  "session_id": "uuid",          // omit to auto-create
+  "session_id": "uuid",
   "message": "string",
-  "appliance_model": "WDT780SAEM1",  // optional, persisted in session
-  "stream": false
+  "appliance_model": "WDT780SAEM1",
+  "stream": true
 }
 ```
-
-Response fields vary by intent:
 
 | Field | Present when |
 |-------|-------------|
 | `text` | Always |
-| `parts` | Search results available |
+| `parts` | Search / troubleshoot / install |
 | `installation_steps` | Install intent |
 | `compatibility` | Compatibility check |
-| `cart_update` | Item added to cart |
-| `out_of_scope` | Query rejected by guardrail |
+| `cart_update` | Cart add/remove |
+| `source` | `"db"` or `"live"` when parts came from scrape fallback |
+| `out_of_scope` | Guardrail rejection |
 
-### Other Endpoints
+### Other endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `GET` | `/health` | Health check → `{"ok": true}` |
-| `POST` | `/api/session` | Create session → `{"session_id": "uuid"}` |
-| `GET` | `/api/cart/{session_id}` | Get cart → `{items, total, count}` |
+| `GET` | `/health` | `{"ok": true}` |
+| `POST` | `/api/session` | Create session |
+| `GET` | `/api/cart/{session_id}` | Cart items + total |
 | `DELETE` | `/api/cart/{session_id}/item/{ps_number}` | Remove item |
 
 ---
 
-## Project Structure
+## Project structure
 
 ```
 partselect-agent/
-├── config.toml              # All settings (LLM, DB, Redis, retrieval, scope)
-├── .env.example             # Environment variable template
-├── docker-compose.yml       # postgres + redis + backend + frontend
+├── config.toml                 # LLM, DB, retrieval, scope
+├── docker-compose.yml
 ├── backend/
-│   ├── requirements.txt
-│   ├── Dockerfile
-│   ├── entrypoint.sh        # wait-for-db → ingest → uvicorn
-│   ├── data/raw/            # JSONL source data (gitignored)
-│   └── app/
-│       ├── main.py          # FastAPI app + CORS
-│       ├── config.py        # Pydantic settings (config.toml + env vars)
-│       ├── db/
-│       │   ├── schema.sql   # PostgreSQL DDL (pgvector + HNSW index)
-│       │   └── engine.py
-│       ├── rag/
-│       │   ├── embedder.py  # sentence-transformers wrapper
-│       │   └── ingest.py    # JSONL → Postgres pipeline
-│       ├── agent/
-│       │   ├── guardrails.py
-│       │   ├── router.py    # Deterministic intent classifier
-│       │   ├── llm_provider.py
-│       │   ├── graph.py     # LangGraph ReAct agent
-│       │   ├── state.py
-│       │   └── tools/       # search_parts, check_compat, install, troubleshoot, cart
-│       ├── services/        # session_service, cart_service
-│       └── routers/         # chat, cart, session
+│   ├── app/
+│   │   ├── agent/
+│   │   │   ├── router.py           # LLM intent classifier
+│   │   │   ├── guardrails.py       # Scope + intent–tool map
+│   │   │   ├── part_context.py     # Session PS / name resolution
+│   │   │   ├── troubleshoot_handler.py  # RAG + synthesis + footer
+│   │   │   ├── llm_provider.py     # flash classifier + pro synthesis
+│   │   │   ├── graph.py            # LangGraph (GENERAL only)
+│   │   │   ├── messages.py         # Shared user-facing templates
+│   │   │   └── tools/              # search, compat, install, troubleshoot, cart
+│   │   ├── routers/chat.py         # Intent → handler dispatch
+│   │   ├── services/               # session, cart, chat history
+│   │   └── rag/                    # embedder + ingest
+│   ├── scrapers/                   # Selenium pipeline + Firecrawl runtime
+│   │   ├── run_collection.py       # Stage orchestrator CLI
+│   │   └── product_utils.py        # Shared URL/price parsing
+│   └── tests/
 └── frontend/
-    ├── .tool-versions       # nodejs 22.12.0
-    ├── Dockerfile
-    └── src/
-        ├── lib/api.js
-        ├── hooks/           # useSession, useCart, useChat
-        └── components/      # ChatWidget, ProductCard, InstallationGuide,
-                             # CompatibilityBadge, CartDrawer, + 8 more
 ```
 
 ---
 
-## Configuration
-
-All tunable settings live in `config.toml`. Key sections:
+## Configuration (`config.toml`)
 
 ```toml
 [llm]
-provider = "openrouter"
-base_url = "https://openrouter.ai/api/v1"
-api_key_env_var = "OPENROUTER_API_KEY"
-tool_model = "deepseek/deepseek-chat"
-synthesis_model = "deepseek/deepseek-chat"
+tool_model = "deepseek/deepseek-v4-flash"      # intent classifier
+synthesis_model = "deepseek/deepseek-v4-pro"   # troubleshoot + agent
+tool_temperature = 0.0
+synthesis_temperature = 0.3
 
 [retrieval]
-top_k = 5
-
-[scope]
-appliance_keywords = ["refrigerator", "dishwasher", ...]
-out_of_scope_keywords = ["recipe", "weather", ...]
+top_k = 7
 ```
-
-Switch LLM providers by changing `base_url`, `api_key_env_var`, and model slugs — no code changes needed.
 
 ---
 
-## Design Decisions
+## Design decisions
 
-**Deterministic-first routing:** Install, compatibility, search, and cart queries bypass the LLM entirely — they use SQL lookups with sub-millisecond response times. Only troubleshoot and complex multi-step queries invoke the LangGraph agent. This makes the three demo queries bulletproof regardless of LLM availability.
+**Deterministic-first routing:** Install, compatibility, search, parts-for-model, cart, and troubleshoot use direct handlers. Only ambiguous multi-step requests hit LangGraph. Demo-critical paths (install PS11752778, compatibility checks) do not depend on agent tool-choice.
 
-**Hybrid data strategy:** ~2,100 parts ingested from JSONL. Critical parts (PS11752778) are hardcoded as seeds so demo queries always work even on a fresh database. Firecrawl provides live fallback for any PS number not yet ingested.
+**Dual-model split:** Flash model for fast, cheap structured classification; pro model for natural-language synthesis where quality matters.
 
-**pgvector HNSW index:** Semantic similarity search for troubleshooting uses 384-dimension MiniLM embeddings with an HNSW index (m=16, ef_construction=64) — cosine similarity in <1 ms at this dataset size.
+**Session-grounded cart:** Pronoun cart requests bind to the **latest** part batch, not the classifier's stale PS field. Name-based requests search rolling history.
 
-**Provider-agnostic LLM:** All model slugs, base URLs, and temperatures are in `config.toml`. Switching from DeepSeek to any OpenAI-compatible API requires only a config change.
+**RAG troubleshoot with guardrails:** Retrieved repair guides and articles constrain the synthesis prompt; a fixed footer always points users to PartSelect Repair and Instant Repairman.
 
-**Session + cart persistence:** Sessions and carts are stored in PostgreSQL (not Redis) for durability. The frontend stores `session_id` in `localStorage`, so the cart survives page refreshes. The appliance model number is also persisted per session and automatically used in subsequent compatibility checks.
+**Hybrid data + live enrichment:** JSONL bulk ingest plus Firecrawl/Selenium refresh for missing or stale prices. `part_enrichment.py` validates parts, refreshes prices from product URLs, and filters "Page Not Found" junk.
+
+**pgvector HNSW:** 384-dim MiniLM embeddings; cosine search over `repair` and `article` sources in the `embeddings` table.
+
+---
+
+## Next phases (suggested)
+
+- Complete bulk scrape (`details` + `enrich`) and re-ingest for full catalog coverage
+- Expand scenario tests for contextual cart and troubleshoot RAG quality
+- Optional: stream troubleshoot responses; cache retrieval results in Redis (`retrieval_ttl_seconds`)
+- Frontend: surface `source: live` badge and troubleshoot-related parts more prominently
