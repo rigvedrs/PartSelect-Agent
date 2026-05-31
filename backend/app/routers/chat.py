@@ -7,10 +7,7 @@ from pydantic import BaseModel
 
 from app.agent.part_context import resolve_ps_for_cart, match_parts_by_query
 from app.agent.guardrails import is_in_scope, reconcile_cart_intent, assert_tool_allowed
-from app.agent.router import (
-    classify_intent, extract_model_number, latest_utterance, Intent,
-    normalize_part_query,
-)
+from app.agent.router import classify_intent, extract_model_number, latest_utterance, Intent
 from app.agent.tools.search_parts import search_parts
 from app.agent.tools.check_compatibility import check_compatibility
 from app.agent.tools.list_compatible_parts import list_compatible_parts
@@ -108,8 +105,8 @@ async def chat(req: ChatRequest):
         last_parts=get_last_parts(session),
     )
     intent = reconcile_cart_intent(classification.intent, active)
-    typed_part_query = normalize_part_query(classification.part_query, active)
-    part_query = typed_part_query or active
+    catalog_filter = classification.catalog_filter_query(appliance_model)
+    part_query = catalog_filter or active
     last_parts = get_last_parts(session)
     recent_parts = get_recent_parts(session)
     ps = resolve_ps_for_cart(
@@ -154,10 +151,10 @@ async def chat(req: ChatRequest):
 
     if intent == Intent.COMPATIBILITY:
         model = appliance_model
-        if not ps and model and typed_part_query:
+        if not ps and model and catalog_filter:
             result = list_compatible_parts(
                 model,
-                part_query=typed_part_query,
+                part_query=catalog_filter,
                 limit=_parts_lookup_limit(Intent.SEARCH, part_query),
             )
             return _respond(session_id, message, {
@@ -189,8 +186,8 @@ async def chat(req: ChatRequest):
             return {"session_id": session_id, "text": text}
         result = list_compatible_parts(
             model,
-            part_query=typed_part_query,
-            limit=_parts_lookup_limit(intent, typed_part_query or part_query),
+            part_query=catalog_filter,
+            limit=_parts_lookup_limit(intent, catalog_filter or part_query),
         )
         return _respond(session_id, message, {
             "session_id": session_id,

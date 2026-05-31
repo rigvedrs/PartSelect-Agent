@@ -5,7 +5,7 @@ import re
 from enum import Enum
 
 from langchain_core.messages import HumanMessage, SystemMessage
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.agent.llm_provider import get_classifier_llm
 from app.observability import get_logger
@@ -18,15 +18,8 @@ _MODEL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
-_PLACEHOLDER_PART_QUERY = frozenset({
-    "null", "none", "nil", "n/a", "na", "undefined", "empty",
-})
-_LIST_ALL_PARTS_RE = re.compile(
-    r"\b(?:list|show|see|get|browse)\s+(?:all|every|available)\b.*\bparts?\b|"
-    r"\ball\s+(?:of\s+)?(?:its|the|my)?\s*parts?\b|"
-    r"\bparts?\s+for\s+(?:it|this|that|the)\s+(?:model|appliance|fridge|refrigerator)\b",
-    re.IGNORECASE,
-)
+# LLMs often emit the word "null" in string fields instead of omitting them.
+_LLM_EMPTY_TOKENS = frozenset({"null", "none", "nil", "n/a", "na", "undefined", "empty"})
 
 _CLASSIFIER_PROMPT = """You route messages for a PartSelect refrigerator and dishwasher parts assistant.
 
@@ -41,12 +34,16 @@ Choose exactly one intent:
 - remove_from_cart: remove a part from cart
 - general: anything else or multi-step requests
 
+Structured fields:
+- browse_all_parts (boolean): true when the user wants the full compatible catalog for their model
+  with NO part-type filter (e.g. "list all its parts", "show all parts for my model").
+- part_query (string, optional): ONLY when browse_all_parts is false — a short part-type phrase
+  such as "water filter" or "door hinge". Never put a model number or the word null here.
+- ps_number: PartSelect PS##### when present in the message.
+
 Rules:
-- Extract ps_number (PS#####) when present in the message.
-- For add_to_cart/remove_from_cart with pronouns ("it", "that one"): leave ps_number null — the app resolves from the latest shown parts.
+- For add_to_cart/remove_from_cart with pronouns ("it", "that one"): omit ps_number — the app resolves from session.
 - compatibility ONLY when both a PS number and model context appear; otherwise use search or parts_for_model.
-- For search/parts_for_model, set part_query to the part type only (e.g. "water filter", "door hinge").
-- When the user wants ALL parts for a model (e.g. "list all its parts"), leave part_query empty/null.
 - Use session model context when the user says "for it", "same model", "its parts".
 - Prefer parts_for_model when listing parts for a named model; search when finding a part type."""
 
@@ -64,36 +61,57 @@ class Intent(str, Enum):
 
 
 class IntentResult(BaseModel):
+    """Structured classifier output — validated at the LLM boundary."""
+
     intent: Intent
+    browse_all_parts: bool = Field(
+        default=False,
+        description="True when listing the full compatible catalog without a part-type filter",
+    )
     part_query: str | None = Field(
         default=None,
-        description="Part type or description for search/parts_for_model",
+        description="Part-type keywords when browse_all_parts is false",
     )
     ps_number: str | None = Field(
         default=None,
         description="PartSelect PS number if mentioned",
     )
 
+    @field_validator("part_query", mode="before")
+    @classmethod
+    def _coerce_part_query(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text or text.lower() in _LLM_EMPTY_TOKENS:
+            return None
+        return text
 
-def normalize_part_query(part_query: str | None, message: str | None = None) -> str | None:
-    """Drop LLM placeholder strings and 'list all parts' requests (no keyword filter)."""
-    if message and _LIST_ALL_PARTS_RE.search(message):
+    @field_validator("ps_number", mode="before")
+    @classmethod
+    def _coerce_ps_number(cls, value: object) -> str | None:
+        if value is None:
+            return None
+        text = str(value).strip().upper()
+        if not text or text in _LLM_EMPTY_TOKENS:
+            return None
+        if text.startswith("PS"):
+            return text
         return None
-    if not part_query:
-        return None
-    cleaned = str(part_query).strip()
-    if not cleaned or cleaned.lower() in _PLACEHOLDER_PART_QUERY:
-        return None
-    return cleaned
 
-
-def normalize_ps_number(ps_number: str | None) -> str | None:
-    if not ps_number:
-        return None
-    cleaned = str(ps_number).strip().upper()
-    if cleaned in ("NULL", "NONE", "N/A", ""):
-        return None
-    return cleaned
+    def catalog_filter_query(self, appliance_model: str | None = None) -> str | None:
+        """Part-type filter for catalog lookups, or None for an unfiltered list."""
+        if self.browse_all_parts:
+            return None
+        if not self.part_query:
+            return None
+        query = self.part_query.strip()
+        if appliance_model and query.upper() == appliance_model.strip().upper():
+            return None
+        model_token = extract_model_number(query)
+        if model_token and model_token.upper() == query.upper():
+            return None
+        return query
 
 
 def latest_utterance(message: str) -> str:
@@ -121,6 +139,14 @@ def _guess_part_query(message: str) -> str | None:
     return None
 
 
+def _fallback_browse_all(message: str) -> bool:
+    lower = message.lower()
+    return bool(
+        re.search(r"\b(?:list|show)\s+all\b", lower)
+        or re.search(r"\ball\s+(?:of\s+)?(?:its|the|my)\s+parts?\b", lower)
+    )
+
+
 def _fallback_classification(message: str) -> IntentResult:
     """Minimal regex fallback if the LLM call fails."""
     ps = _PS_PATTERN.search(message)
@@ -145,11 +171,19 @@ def _fallback_classification(message: str) -> IntentResult:
     if ps_number and model:
         return IntentResult(intent=Intent.COMPATIBILITY, ps_number=ps_number)
     if model and not ps_number and any(k in lower for k in ("compatible", "parts", "fit")):
-        return IntentResult(intent=Intent.PARTS_FOR_MODEL, part_query=_guess_part_query(message))
+        return IntentResult(
+            intent=Intent.PARTS_FOR_MODEL,
+            browse_all_parts=_fallback_browse_all(message),
+            part_query=None if _fallback_browse_all(message) else _guess_part_query(message),
+        )
     if any(k in lower for k in ("not working", "leaking", "not draining", "how to fix", "repair")):
         return IntentResult(intent=Intent.TROUBLESHOOT)
     if any(k in lower for k in ("find", "need", "looking for", "search")):
-        return IntentResult(intent=Intent.SEARCH, ps_number=ps_number, part_query=_guess_part_query(message))
+        return IntentResult(
+            intent=Intent.SEARCH,
+            ps_number=ps_number,
+            part_query=_guess_part_query(message),
+        )
     return IntentResult(intent=Intent.GENERAL, ps_number=ps_number)
 
 
@@ -184,11 +218,9 @@ async def classify_intent(
             SystemMessage(content=_CLASSIFIER_PROMPT),
             HumanMessage(content=user_content),
         ])
-        result.ps_number = normalize_ps_number(result.ps_number)
-        result.part_query = normalize_part_query(result.part_query, text)
         log.info(
-            "classified intent=%s part_query=%r ps=%r",
-            result.intent.value, result.part_query, result.ps_number,
+            "classified intent=%s browse_all=%s part_query=%r ps=%r",
+            result.intent.value, result.browse_all_parts, result.part_query, result.ps_number,
         )
         return result
     except Exception:
