@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending_intent TEXT;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS pending_part_query TEXT;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS last_parts_json JSONB;
 
 CREATE TABLE IF NOT EXISTS session_messages (
     id SERIAL PRIMARY KEY,
