@@ -5,6 +5,9 @@ import "./MessageBubble.css";
 
 export default function MessageList({ messages, isLoading, onAddToCart }) {
   const endRef = useRef(null);
+  const lastMsg = messages[messages.length - 1];
+  const showTyping = isLoading && !(lastMsg?.streaming);
+
   useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [messages, isLoading]);
 
   return (
@@ -12,7 +15,7 @@ export default function MessageList({ messages, isLoading, onAddToCart }) {
       {messages.map((msg, i) => (
         <MessageBubble key={i} message={msg} onAddToCart={onAddToCart} />
       ))}
-      {isLoading && (
+      {showTyping && (
         <div className="bubble-row assistant">
           <div className="bubble assistant">
             <TypingIndicator />

@@ -31,18 +31,27 @@ def test_load_and_record_exchange(session_id):
         load_langchain_history,
         record_exchange,
         load_messages,
+        load_ui_messages,
+        record_assistant_response,
     )
     record_exchange(session_id, "first question", "first answer")
-    record_exchange(session_id, "second question", "second answer")
+    record_assistant_response(session_id, "part search", {
+        "text": "Found 2 parts",
+        "parts": [{"ps_number": "PS1", "name": "Filter"}],
+    })
 
     rows = load_messages(session_id)
     assert len(rows) == 4
-    assert rows[-1]["content"] == "second answer"
+    assert rows[-1]["content"] == "Found 2 parts"
+    assert rows[-1]["metadata"] is not None
+
+    ui = load_ui_messages(session_id)
+    assert ui[-1]["parts"][0]["ps_number"] == "PS1"
 
     lc = load_langchain_history(session_id)
     assert len(lc) == 4
     assert lc[0].content == "first question"
-    assert lc[-1].content == "second answer"
+    assert lc[-1].content == "Found 2 parts"
 
 
 def test_agent_chat_passes_history_to_graph(session_id, monkeypatch):

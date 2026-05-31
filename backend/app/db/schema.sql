@@ -76,6 +76,7 @@ CREATE TABLE IF NOT EXISTS session_messages (
     content TEXT NOT NULL,
     created_at TIMESTAMPTZ DEFAULT now()
 );
+ALTER TABLE session_messages ADD COLUMN IF NOT EXISTS metadata JSONB;
 CREATE INDEX IF NOT EXISTS idx_session_messages_session
     ON session_messages(session_id, id);
 

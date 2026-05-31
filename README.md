@@ -54,6 +54,8 @@ Every chat message goes through the same pipeline:
 5. **Pending slot completion** — if the session has a `pending_intent` (e.g. user searched for a part type without a model) and the current message supplies a model number, the pending search runs **before** the classified intent handler, preserving the original part-type query.
 6. **Handler** — run the matching deterministic handler or, for `general` only, stream through the LangGraph agent.
 
+**Streaming:** When `stream: true` (default), all responses use **Server-Sent Events** (`text/event-stream`). LLM paths (`troubleshoot`, `general`) emit token chunks as they are generated; deterministic handlers emit a single `done` event with the full payload (parts, cart updates, etc.).
+
 Handlers record exchanges in `session_messages` and update `last_parts_json` whenever parts are returned, so follow-up turns ("add it", "remove that filter") stay grounded in what the user actually saw.
 
 ---
@@ -115,6 +117,10 @@ Stored per session in PostgreSQL:
 | `appliance_model` | Persisted model number from chat or the UI field |
 | `pending_intent` / `pending_part_query` | Multi-turn search when model was missing |
 | `last_parts_json` | `{ "latest": [...], "history": [...] }` — parts shown to the user |
+
+Chat turns are persisted in `session_messages` (user + assistant text). Assistant rows also store optional **`metadata` JSONB** (parts, installation steps, compatibility, cart hints) so the UI can restore rich cards after a page reload.
+
+The frontend stores `session_id` in **`localStorage`** (`partselect_session_id`) and reloads history via `GET /api/session/{session_id}/messages` on mount.
 
 - **`latest`** — most recent batch of parts (used for "add it" / "that one").
 - **`history`** — rolling window (max 20) for name-based cart resolution ("add the water filter").
@@ -394,9 +400,19 @@ Router live tests and some scenario cases require `OPENROUTER_API_KEY`.
 }
 ```
 
+With `stream: true`, the response is SSE:
+
+```
+data: {"token": "partial text..."}
+
+data: {"done": true, "session_id": "...", "text": "...", "parts": [...]}
+```
+
+Set `stream: false` for a single JSON object (used by tests and legacy clients).
+
 | Field | Present when |
 |-------|-------------|
-| `text` | Always |
+| `text` | Always (in `done` event or JSON body) |
 | `parts` | Search / troubleshoot / install |
 | `installation_steps` | Install intent |
 | `compatibility` | Compatibility check |
@@ -410,6 +426,7 @@ Router live tests and some scenario cases require `OPENROUTER_API_KEY`.
 |--------|------|-------------|
 | `GET` | `/health` | `{"ok": true}` |
 | `POST` | `/api/session` | Create session |
+| `GET` | `/api/session/{session_id}/messages` | Restore chat history for the UI |
 | `GET` | `/api/cart/{session_id}` | Cart items + total |
 | `DELETE` | `/api/cart/{session_id}/item/{ps_number}` | Remove item |
 
@@ -495,5 +512,5 @@ Runtime live scrape backend is controlled via env (not `config.toml`): `LIVE_SCR
 
 - Complete bulk scrape (`details` + `enrich`) and re-ingest for full catalog coverage
 - Expand scenario tests for contextual cart and troubleshoot RAG quality
-- Optional: stream troubleshoot responses; cache retrieval results in Redis (`retrieval_ttl_seconds`)
+- Optional: cache retrieval results in Redis (`retrieval_ttl_seconds`)
 - Frontend: surface `source: live` badge and troubleshoot-related parts more prominently

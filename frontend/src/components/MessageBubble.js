@@ -7,12 +7,15 @@ import CompatibilityBadge from "./CompatibilityBadge";
 import MessageContent from "./MessageContent";
 
 export default function MessageBubble({ message, onAddToCart }) {
-  const { role, content, parts, installation_steps, compatibility, out_of_scope } = message;
+  const { role, content, parts, installation_steps, compatibility, out_of_scope, streaming } = message;
 
   return (
     <div className={`bubble-row ${role}`}>
       <div className={`bubble ${role}`}>
         {content && <MessageContent content={content} />}
+        {streaming && !content && (
+          <span className="stream-cursor" aria-hidden="true">▍</span>
+        )}
 
         {compatibility && <CompatibilityBadge result={compatibility} />}
 

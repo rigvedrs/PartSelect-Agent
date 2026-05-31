@@ -121,27 +121,59 @@ async def run_agent_streaming(
     appliance_model: str | None,
     history: list,
 ) -> AsyncIterator[str]:
-    """Yield text tokens. `history` is prior user/assistant LangChain messages for this session."""
+    """Yield LLM text tokens from the LangGraph agent."""
     graph = build_graph(session_id)
     content = message
     if appliance_model and appliance_model.strip():
         content = f"[My appliance model: {appliance_model.strip()}]\n{message}"
     user_msg = HumanMessage(content=content)
+    input_messages = history + [user_msg]
+
+    def _content_from_chunk(raw: object) -> str:
+        if raw is None:
+            return ""
+        if isinstance(raw, str):
+            return raw
+        if isinstance(raw, list):
+            return "".join(
+                block.get("text", "") if isinstance(block, dict) else str(block)
+                for block in raw
+            )
+        return str(raw)
+
+    emitted = False
     try:
-        result = await graph.ainvoke({"messages": history + [user_msg]})
+        async for event in graph.astream_events(
+            {"messages": input_messages},
+            version="v2",
+        ):
+            if event.get("event") != "on_chat_model_stream":
+                continue
+            chunk = event.get("data", {}).get("chunk")
+            if chunk is None:
+                continue
+            token = _content_from_chunk(getattr(chunk, "content", None))
+            if token:
+                emitted = True
+                yield token
+    except Exception:
+        log.exception("agent.astream_events failed session=%s", session_id)
+        yield "Sorry, something went wrong while processing that. Please try rephrasing your question."
+        return
+
+    if emitted:
+        return
+
+    try:
+        result = await graph.ainvoke({"messages": input_messages})
     except Exception:
         log.exception("agent.invoke failed session=%s", session_id)
         yield "Sorry, something went wrong while processing that. Please try rephrasing your question."
         return
+
     final_msg = result["messages"][-1]
-    text = getattr(final_msg, "content", str(final_msg))
-    if isinstance(text, list):
-        text = "".join(
-            block.get("text", "") if isinstance(block, dict) else str(block)
-            for block in text
-        )
+    text = _content_from_chunk(getattr(final_msg, "content", str(final_msg)))
     if not text.strip():
         log.warning("agent returned empty text session=%s", session_id)
-    chunk_size = 20
-    for i in range(0, len(text), chunk_size):
-        yield text[i:i + chunk_size]
+        text = "I couldn't complete that request. Please try again or rephrase your question."
+    yield text

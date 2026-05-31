@@ -142,3 +142,35 @@ def test_cart_delete(client):
     r = client.delete(f"/api/cart/{sid}/item/PS11752778")
     assert r.status_code == 200
     assert r.json()["count"] == 0
+
+
+def test_session_messages_restore(client):
+    sid = client.post("/api/session").json()["session_id"]
+    client.post("/api/chat", json={
+        "session_id": sid,
+        "message": "Hi",
+        "stream": False,
+    })
+    r = client.get(f"/api/session/{sid}/messages")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["session_id"] == sid
+    assert len(body["messages"]) >= 2
+    assert body["messages"][0]["role"] == "user"
+    assert body["messages"][-1]["role"] == "assistant"
+
+
+def test_chat_sse_deterministic_done_event(client):
+    sid = client.post("/api/session").json()["session_id"]
+    with client.stream("POST", "/api/chat", json={
+        "session_id": sid,
+        "message": "Hi",
+        "stream": True,
+    }) as r:
+        assert r.status_code == 200
+        assert "text/event-stream" in r.headers.get("content-type", "")
+        chunks = list(r.iter_bytes())
+    assert chunks
+    payload = b"".join(chunks).decode()
+    assert '"done": true' in payload
+    assert '"text"' in payload

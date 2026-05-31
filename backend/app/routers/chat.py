@@ -1,5 +1,4 @@
-import json
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 from fastapi import APIRouter
 from fastapi.responses import StreamingResponse
@@ -16,17 +15,28 @@ from app.agent.tools.get_installation import get_installation_guide
 from app.agent.tools.add_to_cart import add_to_cart
 from app.agent.tools.remove_from_cart import remove_from_cart
 from app.agent.graph import run_agent_streaming
-from app.agent.troubleshoot_handler import generate_troubleshoot_answer
-from app.services.chat_history_service import load_langchain_history, record_exchange
+from app.agent.troubleshoot_handler import stream_troubleshoot_answer, prepare_troubleshoot
+from app.services.chat_history_service import (
+    load_langchain_history,
+    record_assistant_response,
+    record_exchange,
+)
 from app.services.session_service import (
     get_session, set_appliance_model, create_session, set_pending, clear_pending,
     remember_parts, get_last_parts, get_recent_parts, get_part_hint,
 )
+from app.routers.sse import sse_done, sse_token
 from app.observability import get_logger, new_request_id
 
 log = get_logger("routers.chat")
 
 router = APIRouter(prefix="/api", tags=["chat"])
+
+_SSE_HEADERS = {
+    "Cache-Control": "no-cache",
+    "Connection": "keep-alive",
+    "X-Accel-Buffering": "no",
+}
 
 
 class ChatRequest(BaseModel):
@@ -48,7 +58,6 @@ def _resolve_model(message: str, appliance_model: str | None, session: dict | No
     return ""
 
 
-
 def _catalog_scope(classification) -> CatalogScope:
     return CatalogScope.FULL if classification.browse_all_parts else CatalogScope.BY_PART_TYPE
 
@@ -68,11 +77,80 @@ def _track_parts(session_id: str, parts: list | None) -> None:
         remember_parts(session_id, parts)
 
 
-def _respond(session_id: str, message: str, payload: dict) -> dict:
-    _track_parts(session_id, payload.get("parts"))
-    if "text" in payload:
-        record_exchange(session_id, message, payload["text"])
-    return payload
+def _finalize(session_id: str, user_message: str, payload: dict[str, Any]) -> dict[str, Any]:
+    full = {"session_id": session_id, **payload}
+    _track_parts(session_id, full.get("parts"))
+    record_assistant_response(session_id, user_message, full)
+    return full
+
+
+def _sse_response(gen: AsyncIterator[bytes]) -> StreamingResponse:
+    return StreamingResponse(gen, media_type="text/event-stream", headers=_SSE_HEADERS)
+
+
+async def _respond_json_or_sse(
+    req: ChatRequest,
+    session_id: str,
+    user_message: str,
+    payload: dict[str, Any],
+) -> dict[str, Any] | StreamingResponse:
+    if req.stream:
+        full = {"session_id": session_id, **payload}
+
+        async def _gen() -> AsyncIterator[bytes]:
+            _track_parts(session_id, full.get("parts"))
+            record_assistant_response(session_id, user_message, full)
+            yield sse_done(full)
+
+        return _sse_response(_gen())
+    return _finalize(session_id, user_message, payload)
+
+
+async def _stream_llm_tokens(
+    req: ChatRequest,
+    session_id: str,
+    user_message: str,
+    token_source: AsyncIterator[str],
+    extra: dict[str, Any] | None = None,
+) -> StreamingResponse:
+    async def _gen() -> AsyncIterator[bytes]:
+        text_parts: list[str] = []
+        async for token in token_source:
+            text_parts.append(token)
+            yield sse_token(token)
+        full_text = "".join(text_parts).strip()
+        if not full_text:
+            full_text = "I couldn't complete that request. Please try again or rephrase your question."
+        payload: dict[str, Any] = {"session_id": session_id, "text": full_text, **(extra or {})}
+        _track_parts(session_id, payload.get("parts"))
+        record_assistant_response(session_id, user_message, payload)
+        yield sse_done(payload)
+
+    return _sse_response(_gen())
+
+
+async def _stream_troubleshoot(
+    req: ChatRequest,
+    session_id: str,
+    user_message: str,
+    active: str,
+) -> StreamingResponse | dict[str, Any]:
+    prep = prepare_troubleshoot(user_message)
+    extra = {"parts": prep["parts"]}
+
+    if not req.stream:
+        from app.agent.troubleshoot_handler import generate_troubleshoot_answer
+        result = await generate_troubleshoot_answer(active)
+        return _finalize(session_id, user_message, {
+            "text": result["text"],
+            "parts": result.get("parts"),
+        })
+
+    async def _tokens() -> AsyncIterator[str]:
+        async for token in stream_troubleshoot_answer(active, prep=prep):
+            yield token
+
+    return await _stream_llm_tokens(req, session_id, user_message, _tokens(), extra=extra)
 
 
 @router.post("/chat")
@@ -102,8 +180,17 @@ async def chat(req: ChatRequest):
             "I can only help with Refrigerator and Dishwasher parts. "
             "Please ask me about appliance parts, compatibility, installation, or troubleshooting."
         )
-        record_exchange(session_id, message, oos_text)
-        return {"session_id": session_id, "text": oos_text, "out_of_scope": True}
+        payload = {"text": oos_text, "out_of_scope": True}
+        if req.stream:
+            full = {"session_id": session_id, **payload}
+
+            async def _oos_gen() -> AsyncIterator[bytes]:
+                record_exchange(session_id, message, oos_text, metadata={"out_of_scope": True})
+                yield sse_done(full)
+
+            return _sse_response(_oos_gen())
+        record_exchange(session_id, message, oos_text, metadata={"out_of_scope": True})
+        return {"session_id": session_id, **payload}
 
     classification = await classify_intent(
         message,
@@ -128,8 +215,7 @@ async def chat(req: ChatRequest):
             "checking compatibility, installation steps, troubleshooting, and cart actions. "
             "What do you need help with?"
         )
-        record_exchange(session_id, message, greet)
-        return {"session_id": session_id, "text": greet}
+        return await _respond_json_or_sse(req, session_id, message, {"text": greet})
 
     if session and session.get("pending_intent") and appliance_model:
         pending = session["pending_intent"]
@@ -141,8 +227,7 @@ async def chat(req: ChatRequest):
                 scope=CatalogScope.BY_PART_TYPE,
                 part_type_filter=pending_query or None,
             )
-            return _respond(session_id, message, {
-                "session_id": session_id,
+            return await _respond_json_or_sse(req, session_id, message, {
                 "text": result["reason"],
                 "parts": result["parts"],
             })
@@ -151,8 +236,7 @@ async def chat(req: ChatRequest):
         if ps:
             guide = get_installation_guide(ps)
             text = f"Here are the installation instructions for {guide.get('part_name', ps)}:"
-            return _respond(session_id, message, {
-                "session_id": session_id,
+            return await _respond_json_or_sse(req, session_id, message, {
                 "text": text,
                 "installation_steps": guide.get("steps", []),
                 "parts": [{"ps_number": guide["ps_number"], "name": guide.get("part_name"),
@@ -169,23 +253,22 @@ async def chat(req: ChatRequest):
                 part_type_filter=catalog_filter,
                 limit=_parts_lookup_limit(Intent.SEARCH, catalog_scope),
             )
-            return _respond(session_id, message, {
-                "session_id": session_id,
+            return await _respond_json_or_sse(req, session_id, message, {
                 "text": result["reason"],
                 "parts": result["parts"],
                 "source": result.get("source"),
             })
         if not model:
             text = "Please enter your appliance model number in the field below so I can check compatibility."
-            record_exchange(session_id, message, text)
-            return {"session_id": session_id, "text": text}
+            return await _respond_json_or_sse(req, session_id, message, {"text": text})
         if not ps:
             text = "Please include the PartSelect part number (e.g. PS11752778) to check compatibility."
-            record_exchange(session_id, message, text)
-            return {"session_id": session_id, "text": text}
+            return await _respond_json_or_sse(req, session_id, message, {"text": text})
         result = check_compatibility(model, ps)
-        record_exchange(session_id, message, result["reason"])
-        return {"session_id": session_id, "text": result["reason"], "compatibility": result}
+        return await _respond_json_or_sse(req, session_id, message, {
+            "text": result["reason"],
+            "compatibility": result,
+        })
 
     if intent == Intent.PARTS_FOR_MODEL:
         model = appliance_model
@@ -194,16 +277,14 @@ async def chat(req: ChatRequest):
                 "To list parts that fit your appliance, enter your model number "
                 "in the field below (e.g. WRS325SDHZ)."
             )
-            record_exchange(session_id, message, text)
-            return {"session_id": session_id, "text": text}
+            return await _respond_json_or_sse(req, session_id, message, {"text": text})
         result = list_compatible_parts(
             model,
             scope=catalog_scope,
             part_type_filter=catalog_filter,
             limit=_parts_lookup_limit(intent, catalog_scope),
         )
-        return _respond(session_id, message, {
-            "session_id": session_id,
+        return await _respond_json_or_sse(req, session_id, message, {
             "text": result["reason"],
             "parts": result["parts"],
             "source": result.get("source"),
@@ -218,16 +299,16 @@ async def chat(req: ChatRequest):
                 if result.get("success")
                 else result.get("error", "Could not remove item.")
             )
-            return _respond(session_id, message, {
-                "session_id": session_id, "text": text, "cart_update": result,
+            return await _respond_json_or_sse(req, session_id, message, {
+                "text": text,
+                "cart_update": result,
             })
         if len(last_parts) > 1:
             options = ", ".join(p["ps_number"] for p in last_parts[:5])
             text = f"Which part should I remove? Recently shown: {options}"
         else:
             text = "Which part should I remove? Include the PS number (e.g. PS11752778)."
-        record_exchange(session_id, message, text)
-        return {"session_id": session_id, "text": text}
+        return await _respond_json_or_sse(req, session_id, message, {"text": text})
 
     if intent == Intent.ADD_TO_CART:
         assert_tool_allowed(intent, "add_to_cart")
@@ -237,8 +318,9 @@ async def chat(req: ChatRequest):
                 text = f"Added {ps} to your cart."
             else:
                 text = result.get("error", f"Could not add {ps} to cart.")
-            return _respond(session_id, message, {
-                "session_id": session_id, "text": text, "cart_update": result,
+            return await _respond_json_or_sse(req, session_id, message, {
+                "text": text,
+                "cart_update": result,
             })
         type_matches = match_parts_by_query(recent_parts, part_query)
         if len(type_matches) > 1:
@@ -253,23 +335,18 @@ async def chat(req: ChatRequest):
             text = f"Which part should I add? Recently shown: {options}"
         else:
             text = "Which part should I add? Include the PS number or search for a part first."
-        record_exchange(session_id, message, text)
-        return {"session_id": session_id, "text": text}
+        return await _respond_json_or_sse(req, session_id, message, {"text": text})
 
     if intent == Intent.TROUBLESHOOT:
-        result = await generate_troubleshoot_answer(active)
-        return _respond(session_id, message, {
-            "session_id": session_id,
-            "text": result["text"],
-            "parts": result.get("parts"),
-        })
+        return await _stream_troubleshoot(req, session_id, message, active)
 
     if intent == Intent.SEARCH:
         if ps:
             results = search_parts(ps)
             text = f"Found {len(results)} part(s):"
-            return _respond(session_id, message, {
-                "session_id": session_id, "text": text, "parts": results,
+            return await _respond_json_or_sse(req, session_id, message, {
+                "text": text,
+                "parts": results,
             })
         if not appliance_model:
             set_pending(session_id, "search", part_query)
@@ -277,16 +354,14 @@ async def chat(req: ChatRequest):
                 "Sure — what's your appliance model number? I'll find parts verified to fit it. "
                 "You can type it in the model field below or just reply with it here."
             )
-            record_exchange(session_id, message, ask)
-            return {"session_id": session_id, "text": ask}
+            return await _respond_json_or_sse(req, session_id, message, {"text": ask})
         result = list_compatible_parts(
             appliance_model,
             scope=catalog_scope,
             part_type_filter=catalog_filter,
             limit=_parts_lookup_limit(intent, catalog_scope),
         )
-        return _respond(session_id, message, {
-            "session_id": session_id,
+        return await _respond_json_or_sse(req, session_id, message, {
             "text": result["reason"],
             "parts": result["parts"],
             "source": result.get("source"),
@@ -294,19 +369,13 @@ async def chat(req: ChatRequest):
 
     history = load_langchain_history(session_id)
 
-    async def _stream() -> AsyncIterator[bytes]:
-        text_parts = []
-        async for chunk in run_agent_streaming(
-            session_id, message, appliance_model or None, history
-        ):
-            text_parts.append(chunk)
-            yield f"data: {json.dumps({'token': chunk})}\n\n".encode()
-        full_text = "".join(text_parts)
-        record_exchange(session_id, message, full_text)
-        yield f"data: {json.dumps({'done': True, 'session_id': session_id})}\n\n".encode()
-
     if req.stream:
-        return StreamingResponse(_stream(), media_type="text/event-stream")
+        return await _stream_llm_tokens(
+            req,
+            session_id,
+            message,
+            run_agent_streaming(session_id, message, appliance_model or None, history),
+        )
 
     text_parts = []
     async for chunk in run_agent_streaming(
@@ -316,5 +385,4 @@ async def chat(req: ChatRequest):
     full_text = "".join(text_parts).strip()
     if not full_text:
         full_text = "I couldn't complete that request. Please try again or rephrase your question."
-    record_exchange(session_id, message, full_text)
-    return {"session_id": session_id, "text": full_text}
+    return _finalize(session_id, message, {"text": full_text})
