@@ -236,7 +236,7 @@ DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backend \
 **Incremental workflow** — full Selenium scrape of 6k+ URLs takes hours. Run in batches:
 
 ```bash
-# Resume details (checkpoints skip done URLs; skip video by default for speed)
+# Resume details (checkpoints skip done URLs; captures YouTube links from HTML, no download)
 PYTHONPATH=backend python -m scrapers.run_collection --stage details --limit 200
 
 # Optional: add model cross-refs (slow — clicks "Load more" per product)

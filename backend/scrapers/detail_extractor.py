@@ -185,57 +185,46 @@ def _description(driver: webdriver.Chrome) -> str | None:
     return None
 
 
-def _youtube_from_part_videos(driver: webdriver.Chrome, timeout: int = 8) -> str | None:
-    def to_watch(url: str) -> str | None:
-        if not url:
-            return None
-        m = re.search(r"/embed/([A-Za-z0-9_-]{6,})", url)
-        if m:
-            return f"https://www.youtube.com/watch?v={m.group(1)}"
-        m = re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{6,})", url)
-        return f"https://www.youtube.com/watch?v={m.group(1)}" if m else None
-
-    try:
-        trigger = WebDriverWait(driver, timeout).until(
-            EC.presence_of_element_located((By.ID, "PartVideos"))
-        )
-    except TimeoutException:
+def _youtube_watch_url(url_or_id: str) -> str | None:
+    if not url_or_id:
         return None
+    m = re.search(r"/embed/([A-Za-z0-9_-]{6,})", url_or_id)
+    if m:
+        return f"https://www.youtube.com/watch?v={m.group(1)}"
+    m = re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{6,})", url_or_id)
+    if m:
+        return f"https://www.youtube.com/watch?v={m.group(1)}"
+    if re.fullmatch(r"[A-Za-z0-9_-]{6,}", url_or_id.strip()):
+        return f"https://www.youtube.com/watch?v={url_or_id.strip()}"
+    return None
 
-    try:
-        container = trigger.find_element(By.XPATH, "following-sibling::*[@data-collapsible][1]")
-    except Exception:
-        try:
-            container = trigger.find_element(
-                By.XPATH, "following-sibling::*[@data-collapse-container][1]"
-            )
-        except Exception:
-            return None
 
-    try:
-        driver.execute_script("arguments[0].scrollIntoView({block:'center'});", trigger)
-        if (trigger.get_attribute("aria-expanded") or "").lower() in ("false", "0", "no", ""):
-            driver.execute_script("arguments[0].click();", trigger)
-            time.sleep(0.3)
-    except Exception:
-        pass
+def _youtube_link_from_page(driver: webdriver.Chrome) -> str | None:
+    """Extract a YouTube watch URL from page HTML — link only, no video download or UI expand."""
+    html = driver.page_source or ""
 
-    for fr in container.find_elements(By.CSS_SELECTOR, "iframe[src]"):
-        src = fr.get_attribute("src") or ""
-        if "youtube" in src or "youtu.be" in src:
-            watch = to_watch(src)
+    for pattern in (
+        r"https?://(?:www\.)?youtube\.com/watch\?v=([A-Za-z0-9_-]{6,})",
+        r"https?://(?:www\.)?youtube\.com/embed/([A-Za-z0-9_-]{6,})",
+        r"https?://youtu\.be/([A-Za-z0-9_-]{6,})",
+        r"img\.youtube\.com/vi/([A-Za-z0-9_-]{6,})/",
+        r'data-yt-init="([A-Za-z0-9_-]{6,})"',
+        r"data-yt=\"([A-Za-z0-9_-]{6,})\"",
+    ):
+        m = re.search(pattern, html)
+        if m:
+            watch = _youtube_watch_url(m.group(1))
             if watch:
                 return watch
 
-    for div in container.find_elements(By.CSS_SELECTOR, "div.yt-video"):
-        vid = div.get_attribute("data-yt-init") or div.get_attribute("data-yt") or ""
-        if vid:
-            return f"https://www.youtube.com/watch?v={vid}"
-
-    for img in container.find_elements(By.CSS_SELECTOR, "img[src*='img.youtube.com/vi/']"):
-        m = re.search(r"img\.youtube\.com/vi/([A-Za-z0-9_-]{6,})/", img.get_attribute("src") or "")
-        if m:
-            return f"https://www.youtube.com/watch?v={m.group(1)}"
+    # Fallback: collapsed PartVideos section (no long wait / no click)
+    try:
+        for fr in driver.find_elements(By.CSS_SELECTOR, "iframe[src*='youtube'], iframe[src*='youtu.be']"):
+            watch = _youtube_watch_url(fr.get_attribute("src") or "")
+            if watch:
+                return watch
+    except Exception:
+        pass
     return None
 
 
@@ -341,7 +330,7 @@ def _reviews(driver: webdriver.Chrome) -> dict[str, float | int | None]:
     return {"rating_value": rating_value, "rating_count": rating_count}
 
 
-def extract_product_record(driver: webdriver.Chrome, url: str, *, skip_video: bool = False) -> dict[str, Any]:
+def extract_product_record(driver: webdriver.Chrome, url: str) -> dict[str, Any]:
     from scrapers.product_utils import clean_product_url
 
     url = clean_product_url(url) or url
@@ -366,7 +355,7 @@ def extract_product_record(driver: webdriver.Chrome, url: str, *, skip_video: bo
         "manufactured_for": _manufactured_for(driver),
         "description": _description(driver),
         "replaces": sym["replaces"],
-        "video_url": None if skip_video else _youtube_from_part_videos(driver),
+        "video_url": _youtube_link_from_page(driver),
         "installation_complexity": install["installation_complexity"],
         "installation_time": install["installation_time"],
         "symptoms": sym["symptoms"],
@@ -390,7 +379,6 @@ def run_details_batch(
     limit: int | None = None,
     rotate_every: int = 40,
     pause_s: float = 0.05,
-    skip_video: bool = True,
 ) -> dict[str, int]:
     io_utils.ensure_dirs()
     input_jsonl = input_jsonl or io_utils.PRODUCT_LINKS
@@ -421,7 +409,7 @@ def run_details_batch(
                 driver.quit()
                 driver = browser.build_chrome(headless=True)
             try:
-                record = extract_product_record(driver, url, skip_video=skip_video)
+                record = extract_product_record(driver, url)
                 out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
                 out_f.flush()
                 idx_f.write(url + "\n")

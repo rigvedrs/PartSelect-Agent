@@ -69,11 +69,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-headless", dest="headless", action="store_false")
     parser.add_argument("--limit", type=int, default=None, help="Max product URLs per stage")
     parser.add_argument("--backup", action="store_true", help="Backup existing raw JSONL first")
-    parser.add_argument(
-        "--with-video",
-        action="store_true",
-        help="Extract YouTube URLs during details stage (slower)",
-    )
     args = parser.parse_args(argv)
 
     io_utils.ensure_dirs()
@@ -116,7 +111,6 @@ def main(argv: list[str] | None = None) -> int:
                     driver,
                     input_jsonl=input_path,
                     limit=args.limit,
-                    skip_video=not args.with_video,
                 )
             )
 
