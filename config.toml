@@ -35,7 +35,7 @@ max_tool_iterations = 4
 # Source precedence for compatible-parts lookups (see app/agent/catalog.py)
 filtered_catalog_limit = 20
 full_catalog_limit = 40
-full_catalog_primary_source = "live" # db, live or none
+full_catalog_primary_source = "none" # db, live or none — runtime uses DB only
 db_completeness_min_parts = 5
 # Runtime live scrape: selenium (default, free + Chrome) or firecrawl (paid, set LIVE_SCRAPE_BACKEND=firecrawl)
 

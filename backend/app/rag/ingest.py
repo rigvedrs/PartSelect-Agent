@@ -9,6 +9,7 @@ from app.ingest_models import reshape_part, extract_compat_rows
 from app.rag.embedder import embed
 
 RAW_DIR = Path(__file__).resolve().parents[2] / "data" / "raw"
+DEMO_MODEL_PARTS = RAW_DIR.parent / "scrape_work" / "demo" / "wdt780saem1_parts.json"
 
 
 def _read_jsonl(path: Path):
@@ -138,6 +139,23 @@ def ingest_articles(conn) -> int:
     return count
 
 
+def _seed_demo_model_compat(conn) -> int:
+    """Ensure WDT780SAEM1 compatibility for all parts from demo model-page scrape."""
+    if not DEMO_MODEL_PARTS.exists():
+        return 0
+    data = json.loads(DEMO_MODEL_PARTS.read_text(encoding="utf-8"))
+    count = 0
+    for ps in data.get("ps_numbers", []):
+        _insert_compat(conn, {
+            "ps_number": ps.upper(),
+            "model_number": data.get("model_number", "WDT780SAEM1").upper(),
+            "brand": "Whirlpool",
+            "appliance": "dishwasher",
+        })
+        count += 1
+    return count
+
+
 def run_ingestion(engine: Engine | None = None) -> dict:
     engine = engine or get_engine()
     apply_schema(engine)
@@ -155,9 +173,10 @@ def run_ingestion(engine: Engine | None = None) -> dict:
             conn.execute(text("DELETE FROM repair_guides"))
             conn.execute(text("DELETE FROM articles"))
         parts = ingest_parts(conn)
+        demo_compat = _seed_demo_model_compat(conn)
         repairs = ingest_repairs(conn)
         articles = ingest_articles(conn)
-    return {"skipped": False, "parts": parts, "repairs": repairs, "articles": articles}
+    return {"skipped": False, "parts": parts, "demo_compat": demo_compat, "repairs": repairs, "articles": articles}
 
 
 if __name__ == "__main__":

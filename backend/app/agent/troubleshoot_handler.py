@@ -12,7 +12,7 @@ from app.agent.tools.troubleshoot import (
     retrieve_troubleshoot_context,
     format_context_for_llm,
 )
-from app.observability import get_logger
+from app.observability import get_logger, span
 
 log = get_logger("agent.troubleshoot")
 
@@ -83,14 +83,15 @@ async def stream_troubleshoot_answer(
     body_parts: list[str] = []
 
     try:
-        async for chunk in llm.astream([
-            SystemMessage(content=_SYSTEM),
-            HumanMessage(content=f"Retrieved context:\n{context_text}\n\nCustomer message: {message}"),
-        ]):
-            token = _chunk_text(chunk.content)
-            if token:
-                body_parts.append(token)
-                yield token
+        with span("llm_synthesis"):
+            async for chunk in llm.astream([
+                SystemMessage(content=_SYSTEM),
+                HumanMessage(content=f"Retrieved context:\n{context_text}\n\nCustomer message: {message}"),
+            ]):
+                token = _chunk_text(chunk.content)
+                if token:
+                    body_parts.append(token)
+                    yield token
     except Exception:
         log.exception("troubleshoot LLM stream failed")
 
@@ -108,10 +109,11 @@ async def generate_troubleshoot_answer(message: str) -> dict:
     prep = prepare_troubleshoot(message)
     llm = get_llm("synthesis")
     try:
-        response = await llm.ainvoke([
-            SystemMessage(content=_SYSTEM),
-            HumanMessage(content=f"Retrieved context:\n{prep['context_text']}\n\nCustomer message: {message}"),
-        ])
+        with span("llm_synthesis"):
+            response = await llm.ainvoke([
+                SystemMessage(content=_SYSTEM),
+                HumanMessage(content=f"Retrieved context:\n{prep['context_text']}\n\nCustomer message: {message}"),
+            ])
         body = _chunk_text(response.content).strip()
     except Exception:
         log.exception("troubleshoot LLM failed")

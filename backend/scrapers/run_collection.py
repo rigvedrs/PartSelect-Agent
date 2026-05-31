@@ -53,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         "--stage",
         choices=(
             "catalog",
+            "seed-demo",
             "details",
             "enrich",
             "repairs",
@@ -91,12 +92,19 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
-        if needs_browser:
-            driver = browser.build_chrome(headless=args.headless)
+        if args.stage == "seed-demo":
+            from scrapers.seed_demo import build_seed
+            print("== seed-demo ==")
+            print(json.dumps(build_seed(headless=args.headless), indent=2))
+            return 0
 
         if args.stage == "seed-urls":
             print("== seed-urls from backup parts.jsonl ==")
             print(f"urls: {_seed_links_from_parts_backup()}")
+            return 0
+
+        if needs_browser:
+            driver = browser.build_chrome(headless=args.headless)
 
         if args.stage in ("catalog", "all"):
             print("== catalog ==")

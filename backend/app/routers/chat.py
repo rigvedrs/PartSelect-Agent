@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter
@@ -26,9 +27,16 @@ from app.services.session_service import (
     remember_parts, get_last_parts, get_recent_parts, get_part_hint,
 )
 from app.routers.sse import sse_done, sse_token
-from app.observability import get_logger, new_request_id
+from app.observability import get_logger, new_request_id, span, trace_request
 
 log = get_logger("routers.chat")
+
+
+@asynccontextmanager
+async def _async_span(name: str):
+    with span(name):
+        yield
+
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -155,6 +163,12 @@ async def _stream_troubleshoot(
 
 @router.post("/chat")
 async def chat(req: ChatRequest):
+    rid = new_request_id()
+    with trace_request(rid, route="chat") as trace:
+        return await _chat_inner(req, rid, trace)
+
+
+async def _chat_inner(req: ChatRequest, rid: str, trace) -> dict[str, Any] | StreamingResponse:
     session_id = req.session_id or create_session()
     session = get_session(session_id)
 
@@ -172,7 +186,6 @@ async def chat(req: ChatRequest):
         session = get_session(session_id)
         appliance_model = appliance_model or _model_in_msg
 
-    rid = new_request_id()
     log.info("req=%s msg=%r model=%r", rid, message[:60], appliance_model or "")
 
     if not is_in_scope(active):
@@ -192,12 +205,14 @@ async def chat(req: ChatRequest):
         record_exchange(session_id, message, oos_text, metadata={"out_of_scope": True})
         return {"session_id": session_id, **payload}
 
-    classification = await classify_intent(
-        message,
-        session_model=session.get("appliance_model") if session else None,
-        last_parts=get_last_parts(session),
-    )
+    async with _async_span("intent"):
+        classification = await classify_intent(
+            message,
+            session_model=session.get("appliance_model") if session else None,
+            last_parts=get_last_parts(session),
+        )
     intent = reconcile_cart_intent(classification.intent, active)
+    trace.route = intent.value
     catalog_filter = classification.catalog_filter_query(appliance_model)
     catalog_scope = _catalog_scope(classification)
     part_query = catalog_filter or active

@@ -273,6 +273,7 @@ PYTHONPATH=backend python -m scrapers.verify_output --audit
 | Stage | Module | Output |
 |-------|--------|--------|
 | `catalog` | `catalog_crawler.py` | Product URLs by category |
+| `seed-demo` | `seed_demo.py` | Curated demo URL list: PS11752778, all WDT780SAEM1 parts, top-12 per sub-category |
 | `seed-urls` | `run_collection.py` | Rebuild `product_links_deduped.jsonl` from existing `parts.jsonl` (skip catalog crawl) |
 | `details` | `detail_extractor.py` | Per-product JSONL (price, name, symptoms, YouTube watch URL from HTML) |
 | `enrich` | `compat_enricher.py` | Model cross-references (clicks "Load more", no 30-row cap) |
@@ -287,6 +288,32 @@ Intermediate files live under `backend/data/scrape_work/` (gitignored). Checkpoi
 **`--limit`:** For `details` and `enrich`, limits how many **new** records to scrape this run. Already-done URLs (checkpoint) are skipped and do **not** count toward the limit — so `--limit 200` always means "scrape up to 200 new products," not "examine 200 rows from the input file."
 
 **Shared price parsing:** `scrapers/product_utils.py` (`parse_product_price`, `clean_product_url`) is used by the bulk pipeline and runtime enrichment so chat/cart prices match PartSelect product pages.
+
+**Demo catalog (recommended before recording):** Pre-load case-study queries so runtime never hits live scraping. Uses conda env `instalily` and a single Chrome session for build-time scraping only.
+
+```bash
+conda activate instalily
+cd partselect-agent
+
+# 1. Build curated URL list (~150–250 URLs); clears detail/enrich checkpoints
+PYTHONPATH=backend python -m scrapers.run_collection --stage seed-demo
+
+# 2. Scrape product pages + model cross-refs + repair guides
+PYTHONPATH=backend python -m scrapers.run_collection --stage details
+PYTHONPATH=backend python -m scrapers.run_collection --stage enrich
+PYTHONPATH=backend python -m scrapers.run_collection --stage repairs
+PYTHONPATH=backend python -m scrapers.run_collection --stage export
+
+# 3. Wipe DB and reload from fresh JSONL
+FORCE_REINGEST=1 DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backend \
+  python -m app.rag.ingest
+
+docker compose restart backend
+```
+
+Verify timing logs show `live=0ms` for model/compatibility/troubleshoot queries. Only unknown PS numbers trigger `live=` in logs.
+
+**Observability:** Each `/api/chat` request logs one timing line (`req=… intent=… db=… live=… total=…`). Optional Langfuse tracing when `LANGFUSE_*` env vars are set.
 
 Re-ingest after a fresh scrape (or merge partial scrape work):
 

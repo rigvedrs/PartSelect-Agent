@@ -16,26 +16,13 @@ def model_referral(model: str) -> str:
     )
 
 
-def part_type_not_found(
-    model: str,
-    part_query: str,
-    *,
-    total_parts: int,
-    appliance_hint: str | None = None,
-) -> str:
-    """Model page exists but no parts matched the part-type filter."""
+def part_type_not_found(model: str, part_query: str) -> str:
+    """No DB parts matched the part-type filter for this model."""
     label = part_query.strip().strip("\"'") or "that part type"
-    text = (
-        f"I found model {model} on PartSelect ({total_parts} compatible part(s) listed), "
-        f"but none matching \"{label}\"."
+    return (
+        f"I don't have \"{label}\" parts for model {model} in my catalog. "
+        f"You can browse compatible parts at https://www.partselect.com/Models/{model}/"
     )
-    if appliance_hint:
-        text += (
-            f" The listed parts look like {appliance_hint} components — "
-            "double-check the model number if you expected something else."
-        )
-    text += f" Browse all parts: https://www.partselect.com/Models/{model}/"
-    return text
 
 
 def search_referral(query: str) -> str:

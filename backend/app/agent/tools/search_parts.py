@@ -26,34 +26,36 @@ def _extract_keywords(query: str) -> str:
 def _firecrawl_fallback(ps_number: str) -> list[dict]:
     """Live-scrape an unknown PS number and ingest on-the-fly."""
     from scrapers.runtime_fetch import live_scrape_available
+    from app.observability import span
     if not live_scrape_available():
         return []
-    try:
-        from scrapers.parts_scraper import scrape_and_parse
-        from app.ingest_models import reshape_part
-        from app.rag.ingest import _insert_part
+    with span("live"):
+        try:
+            from scrapers.parts_scraper import scrape_and_parse
+            from app.ingest_models import reshape_part
+            from app.rag.ingest import _insert_part
 
-        raw = scrape_and_parse(ps_number)
-        if not raw:
+            raw = scrape_and_parse(ps_number)
+            if not raw:
+                return []
+
+            p = reshape_part(raw)
+            if not is_valid_part({"ps_number": p["ps_number"], "name": p["name"]}):
+                return []
+            p.setdefault("video_url", None)
+
+            engine = get_engine()
+            with engine.begin() as conn:
+                _insert_part(conn, p)
+
+            with engine.connect() as conn:
+                row = conn.execute(
+                    text("SELECT * FROM parts WHERE ps_number = :ps"),
+                    {"ps": ps_number.upper()}
+                ).mappings().first()
+            return [dict(row)] if row else []
+        except Exception:
             return []
-
-        p = reshape_part(raw)
-        if not is_valid_part({"ps_number": p["ps_number"], "name": p["name"]}):
-            return []
-        p.setdefault("video_url", None)
-
-        engine = get_engine()
-        with engine.begin() as conn:
-            _insert_part(conn, p)
-
-        with engine.connect() as conn:
-            row = conn.execute(
-                text("SELECT * FROM parts WHERE ps_number = :ps"),
-                {"ps": ps_number.upper()}
-            ).mappings().first()
-        return [dict(row)] if row else []
-    except Exception:
-        return []
 
 
 def get_part_by_ps(ps_number: str, fallback: dict | None = None) -> dict | None:
