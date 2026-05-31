@@ -41,6 +41,7 @@ _TROUBLE_KW = (
     "not working", "broken", "leaking", "won't", "wont", "doesn't", "doesnt",
     "stopped", "noise", "error", "problem", "issue", "not cooling",
     "not draining", "not heating", "not dispensing",
+    "how to fix", "how can i fix", "how do i fix", "fix it", "fix my",
 )
 _CART_ADD_KW = ("add to cart", "add to my cart", "to cart")
 _CART_REMOVE_KW = (
