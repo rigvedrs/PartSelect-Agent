@@ -9,8 +9,12 @@ log = get_logger("scrapers.model_lookup")
 
 _PS_RE = re.compile(r"PS\d{5,}", re.IGNORECASE)
 _MODEL_URL = "https://www.partselect.com/Models/{model}/"
-_URL_PS_RE = re.compile(
-    r"\((https?://(?:www\.)?partselect\.com/(PS\d+)[^)]*)\)",
+_NESTED_IMG_LINK_RE = re.compile(
+    r"\[!\[([^\]]+)\]\([^)]*\)\]\((https?://(?:www\.)?partselect\.com/(PS\d+)[^)]*)\)",
+    re.IGNORECASE,
+)
+_PLAIN_PRODUCT_LINK_RE = re.compile(
+    r"(?<!\[)\[([^\]]+)\]\((https?://(?:www\.)?partselect\.com/(PS\d+)[^)]*)\)",
     re.IGNORECASE,
 )
 
@@ -37,6 +41,34 @@ def _filter_entries(entries: list[dict], kws: list[str]) -> list[dict]:
     return or_hits
 
 
+def parse_product_links_from_markdown(md: str) -> list[dict]:
+    """Extract {ps_number, name, product_url} from a PartSelect model page markdown dump."""
+    from scrapers.product_utils import clean_product_url
+
+    entries: list[dict] = []
+    seen: set[str] = set()
+
+    def _add(name: str, raw_url: str, ps: str) -> None:
+        name = name.strip()
+        if not name or "base64" in name.lower():
+            return
+        ps_upper = ps.upper()
+        if ps_upper in seen:
+            return
+        seen.add(ps_upper)
+        entries.append({
+            "ps_number": ps_upper,
+            "name": name,
+            "product_url": clean_product_url(raw_url) or raw_url,
+        })
+
+    for name, raw_url, ps in _NESTED_IMG_LINK_RE.findall(md):
+        _add(name, raw_url, ps)
+    for name, raw_url, ps in _PLAIN_PRODUCT_LINK_RE.findall(md):
+        _add(name, raw_url, ps)
+    return entries
+
+
 def scrape_model_parts(model: str, part_query: str | None = None) -> list[dict]:
     """Return parts listed on a model page as {ps_number, name, product_url}.
 
@@ -53,30 +85,7 @@ def scrape_model_parts(model: str, part_query: str | None = None) -> list[dict]:
     if not md:
         return []
 
-    entries: list[dict] = []
-    seen: set[str] = set()
-    for line in md.splitlines():
-        url_m = _URL_PS_RE.search(line)
-        if not url_m:
-            continue
-        name_m = re.search(r"!\[([^\]]+)\]", line)
-        if not name_m:
-            continue
-        name = name_m.group(1).strip()
-        if not name or "base64" in name.lower():
-            continue
-        ps = url_m.group(2).upper()
-        if ps in seen:
-            continue
-        seen.add(ps)
-        raw_url = url_m.group(1)
-        from scrapers.product_utils import clean_product_url
-        entries.append({
-            "ps_number": ps,
-            "name": name,
-            "product_url": clean_product_url(raw_url) or raw_url,
-        })
-
+    entries = parse_product_links_from_markdown(md)
     kws = _query_keywords(part_query)
     if kws:
         filtered = _filter_entries(entries, kws)

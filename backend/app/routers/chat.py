@@ -48,11 +48,10 @@ def _resolve_model(message: str, appliance_model: str | None, session: dict | No
 
 
 
-def _parts_lookup_limit(intent: Intent, part_query: str | None) -> int:
+def _parts_lookup_limit(intent: Intent, catalog_filter: str | None) -> int:
+    if intent == Intent.PARTS_FOR_MODEL and not catalog_filter:
+        return 40
     if intent == Intent.PARTS_FOR_MODEL:
-        return 20
-    q = (part_query or "").lower()
-    if any(kw in q for kw in ("list all", "all parts")):
         return 20
     return 10
 
@@ -155,7 +154,7 @@ async def chat(req: ChatRequest):
             result = list_compatible_parts(
                 model,
                 part_query=catalog_filter,
-                limit=_parts_lookup_limit(Intent.SEARCH, part_query),
+                limit=_parts_lookup_limit(Intent.SEARCH, catalog_filter),
             )
             return _respond(session_id, message, {
                 "session_id": session_id,
@@ -187,7 +186,7 @@ async def chat(req: ChatRequest):
         result = list_compatible_parts(
             model,
             part_query=catalog_filter,
-            limit=_parts_lookup_limit(intent, catalog_filter or part_query),
+            limit=_parts_lookup_limit(intent, catalog_filter),
         )
         return _respond(session_id, message, {
             "session_id": session_id,
@@ -269,7 +268,7 @@ async def chat(req: ChatRequest):
         result = list_compatible_parts(
             appliance_model,
             part_query=part_query,
-            limit=_parts_lookup_limit(intent, part_query),
+            limit=_parts_lookup_limit(intent, catalog_filter),
         )
         return _respond(session_id, message, {
             "session_id": session_id,
