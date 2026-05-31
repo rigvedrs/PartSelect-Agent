@@ -28,7 +28,9 @@ def _ps_product_url(ps: str) -> str:
 
 
 def _collect_model_parts(driver, model: str) -> list[dict]:
+    from scrapers.model_lookup import _expand_model_page, _parse_model_page_dom
     browser.navigate(driver, model_page_url(model))
+    _expand_model_page(driver)
     entries = _parse_model_page_dom(driver)
     return [{
         "product_url": e["product_url"],

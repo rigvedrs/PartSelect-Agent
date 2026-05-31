@@ -70,6 +70,28 @@ def parse_product_links_from_markdown(md: str) -> list[dict]:
     return entries
 
 
+def _expand_model_page(driver) -> None:
+    """Scroll and click load-more until all model-page parts are in the DOM."""
+    import time
+    from selenium.webdriver.common.by import By
+    from selenium.common.exceptions import NoSuchElementException
+
+    prev = 0
+    for _ in range(40):
+        driver.execute_script("window.scrollTo(0, document.body.scrollHeight);")
+        time.sleep(0.4)
+        for btn in driver.find_elements(By.CSS_SELECTOR, ".js-loadNext, button.js-loadNext"):
+            try:
+                driver.execute_script("arguments[0].click();", btn)
+                time.sleep(0.4)
+            except Exception:
+                pass
+        curr = len(driver.find_elements(By.CSS_SELECTOR, "a[href*='/PS']"))
+        if curr <= prev:
+            break
+        prev = curr
+
+
 def _parse_model_page_dom(driver) -> list[dict]:
     """Parse product links from a loaded PartSelect model page (Selenium DOM)."""
     from selenium.webdriver.common.by import By
@@ -120,6 +142,7 @@ def _scrape_model_parts_selenium(model: str) -> list[dict]:
 
     with headless_driver() as driver:
         browser.navigate(driver, model_page_url(model))
+        _expand_model_page(driver)
         return _parse_model_page_dom(driver)
 
 
