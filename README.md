@@ -225,7 +225,31 @@ Intermediate files live under `backend/data/scrape_work/` (gitignored). Final ex
 
 **Shared price parsing:** `scrapers/product_utils.py` (`parse_product_price`, `clean_product_url`) is used by the bulk pipeline and runtime enrichment so chat/cart prices match PartSelect product pages.
 
-Re-ingest after a fresh scrape:
+Re-ingest after a fresh scrape (or merge partial scrape work):
+
+```bash
+# Recommended: merge scrape_work + reload Postgres (~30s)
+DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backend \
+  python -m scrapers.run_collection --stage refresh-db
+```
+
+**Incremental workflow** — full Selenium scrape of 6k+ URLs takes hours. Run in batches:
+
+```bash
+# Resume details (checkpoints skip done URLs; skip video by default for speed)
+PYTHONPATH=backend python -m scrapers.run_collection --stage details --limit 200
+
+# Optional: add model cross-refs (slow — clicks "Load more" per product)
+PYTHONPATH=backend python -m scrapers.run_collection --stage enrich --limit 50
+
+# Merge fresh data into parts.jsonl + re-ingest
+DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backend \
+  python -m scrapers.run_collection --stage refresh-db
+```
+
+`merge` overlays `scrape_work/details/` and `scrape_work/enrich/` onto `parts.jsonl` by PS number and **keeps existing `model_cross_reference`** when fresh rows lack it.
+
+Manual ingest only:
 
 ```bash
 FORCE_REINGEST=1 DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backend \

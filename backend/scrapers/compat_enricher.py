@@ -118,7 +118,7 @@ def enrich_record(driver: webdriver.Chrome, record: dict) -> dict:
         record["model_cross_reference"] = []
         return record
     browser.navigate(driver, url)
-    time.sleep(1.0 + random.random() * 0.5)
+    time.sleep(0.35 + random.random() * 0.25)
     record["main_image"] = _hero_image(driver)
     record["model_cross_reference"] = _load_crossref_rows(driver)
     return record

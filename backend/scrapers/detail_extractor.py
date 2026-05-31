@@ -341,7 +341,7 @@ def _reviews(driver: webdriver.Chrome) -> dict[str, float | int | None]:
     return {"rating_value": rating_value, "rating_count": rating_count}
 
 
-def extract_product_record(driver: webdriver.Chrome, url: str) -> dict[str, Any]:
+def extract_product_record(driver: webdriver.Chrome, url: str, *, skip_video: bool = False) -> dict[str, Any]:
     from scrapers.product_utils import clean_product_url
 
     url = clean_product_url(url) or url
@@ -366,7 +366,7 @@ def extract_product_record(driver: webdriver.Chrome, url: str) -> dict[str, Any]
         "manufactured_for": _manufactured_for(driver),
         "description": _description(driver),
         "replaces": sym["replaces"],
-        "video_url": _youtube_from_part_videos(driver),
+        "video_url": None if skip_video else _youtube_from_part_videos(driver),
         "installation_complexity": install["installation_complexity"],
         "installation_time": install["installation_time"],
         "symptoms": sym["symptoms"],
@@ -389,7 +389,8 @@ def run_details_batch(
     output_jsonl: Path | None = None,
     limit: int | None = None,
     rotate_every: int = 40,
-    pause_s: float = 0.1,
+    pause_s: float = 0.05,
+    skip_video: bool = True,
 ) -> dict[str, int]:
     io_utils.ensure_dirs()
     input_jsonl = input_jsonl or io_utils.PRODUCT_LINKS
@@ -420,7 +421,7 @@ def run_details_batch(
                 driver.quit()
                 driver = browser.build_chrome(headless=True)
             try:
-                record = extract_product_record(driver, url)
+                record = extract_product_record(driver, url, skip_video=skip_video)
                 out_f.write(json.dumps(record, ensure_ascii=False) + "\n")
                 out_f.flush()
                 idx_f.write(url + "\n")

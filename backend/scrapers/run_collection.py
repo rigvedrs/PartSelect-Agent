@@ -58,6 +58,8 @@ def main(argv: list[str] | None = None) -> int:
             "repairs",
             "articles",
             "export",
+            "merge",
+            "refresh-db",
             "seed-urls",
             "all",
         ),
@@ -67,6 +69,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-headless", dest="headless", action="store_false")
     parser.add_argument("--limit", type=int, default=None, help="Max product URLs per stage")
     parser.add_argument("--backup", action="store_true", help="Backup existing raw JSONL first")
+    parser.add_argument(
+        "--with-video",
+        action="store_true",
+        help="Extract YouTube URLs during details stage (slower)",
+    )
     args = parser.parse_args(argv)
 
     io_utils.ensure_dirs()
@@ -106,7 +113,10 @@ def main(argv: list[str] | None = None) -> int:
                     input_path = io_utils.PRODUCT_LINKS
             print(
                 detail_extractor.run_details_batch(
-                    driver, input_jsonl=input_path, limit=args.limit
+                    driver,
+                    input_jsonl=input_path,
+                    limit=args.limit,
+                    skip_video=not args.with_video,
                 )
             )
 
@@ -129,6 +139,16 @@ def main(argv: list[str] | None = None) -> int:
                 if path.exists():
                     lines = sum(1 for _ in io_utils.iter_jsonl(path))
                     print(f"{path.name}: {lines} lines")
+
+        if args.stage == "merge":
+            from scrapers.merge_catalog import merge_parts_catalog
+            print("== merge fresh scrape into parts.jsonl ==")
+            print(json.dumps(merge_parts_catalog(backup=True), indent=2))
+
+        if args.stage == "refresh-db":
+            from scrapers.merge_catalog import run_refresh_db
+            print("== refresh-db (merge + re-ingest) ==")
+            print(json.dumps(run_refresh_db(), indent=2))
     finally:
         if driver:
             driver.quit()
