@@ -1,6 +1,6 @@
 """LangGraph ReAct agent for complex / multi-step queries.
 
-Only invoked when the deterministic router returns Intent.COMPLEX.
+Only invoked when the router returns Intent.GENERAL.
 """
 from __future__ import annotations
 from typing import Annotated, AsyncIterator, TypedDict
@@ -28,7 +28,7 @@ Your PRIMARY function is product information and customer transactions for Refri
 - Check part compatibility with specific appliance models (use check_compatibility_tool)
 - List parts verified compatible with a model (use list_compatible_parts_tool)
 - Get installation instructions for parts
-- Add or remove parts from their cart
+- Add or remove parts from their cart (handled by the app router — do not use cart tools here)
 
 For troubleshooting or repair questions, do NOT attempt a diagnosis. Respond with exactly:
 "PartSelect has many resources to help you with troubleshooting and repairing your products. For helpful articles and how-to videos you can visit https://www.partselect.com/Repair/. To get help finding parts that may fix the issue you are facing you can also try our Instant Repairman feature at https://www.partselect.com/Instant-Repairman/."
@@ -43,7 +43,7 @@ IMPORTANT:
 Be specific: include part numbers, prices, and links when recommending parts."""
 
 
-def _make_tools(session_id: str):
+def _make_tools(session_id: str, *, include_cart: bool = False):
     from langchain_core.tools import tool
 
     @tool
@@ -68,24 +68,27 @@ def _make_tools(session_id: str):
         """Get step-by-step installation instructions for a part number."""
         return get_installation_guide(part_number)
 
-    @tool
-    def add_to_cart_tool(ps_number: str, quantity: int = 1) -> dict:
-        """Add a part to the user's cart by PS number."""
-        return _add_to_cart(session_id, ps_number, quantity)
-
-    @tool
-    def remove_from_cart_tool(ps_number: str) -> dict:
-        """Remove a part from the user's cart by PS number."""
-        return _remove_from_cart(session_id, ps_number)
-
-    return [
+    tools = [
         search_parts_tool,
         list_compatible_parts_tool,
         check_compatibility_tool,
         get_installation_guide_tool,
-        add_to_cart_tool,
-        remove_from_cart_tool,
     ]
+
+    if include_cart:
+        @tool
+        def add_to_cart_tool(ps_number: str, quantity: int = 1) -> dict:
+            """Add a part to the user's cart by PS number."""
+            return _add_to_cart(session_id, ps_number, quantity)
+
+        @tool
+        def remove_from_cart_tool(ps_number: str) -> dict:
+            """Remove a part from the user's cart by PS number."""
+            return _remove_from_cart(session_id, ps_number)
+
+        tools.extend([add_to_cart_tool, remove_from_cart_tool])
+
+    return tools
 
 
 class AgentState(TypedDict):
@@ -94,7 +97,7 @@ class AgentState(TypedDict):
 
 def build_graph(session_id: str):
     tools = _make_tools(session_id)
-    llm = get_llm("tool").bind_tools(tools)
+    llm = get_llm("synthesis").bind_tools(tools)
 
     def agent_node(state: AgentState) -> dict:
         messages = state["messages"]
