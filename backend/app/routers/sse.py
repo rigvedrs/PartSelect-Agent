@@ -15,6 +15,10 @@ def sse_token(token: str) -> bytes:
     return sse_line({"token": token})
 
 
+def sse_stage(label: str) -> bytes:
+    return sse_line({"stage": label})
+
+
 def sse_done(payload: dict[str, Any]) -> bytes:
     return sse_line({"done": True, **payload})
 

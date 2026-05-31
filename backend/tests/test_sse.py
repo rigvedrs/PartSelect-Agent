@@ -4,10 +4,13 @@ import pytest
 
 
 def test_sse_line_format():
-    from app.routers.sse import sse_line, sse_token, sse_done
+    from app.routers.sse import sse_line, sse_token, sse_done, sse_stage
     assert sse_line({"token": "hi"}) == b'data: {"token": "hi"}\n\n'
     assert b"token" in sse_token("x")
     assert b'"done": true' in sse_done({"session_id": "s1", "text": "ok"})
+    assert sse_stage("Understanding your request...") == (
+        b'data: {"stage": "Understanding your request..."}\n\n'
+    )
 
 
 def test_stream_static_response():
