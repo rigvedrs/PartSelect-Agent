@@ -1,6 +1,7 @@
 import re
 from sqlalchemy import text
 from app.db.engine import get_engine
+from app.observability import get_logger
 
 
 def check_compatibility(model_number: str, part_number_or_query: str) -> dict:
@@ -29,19 +30,33 @@ def check_compatibility(model_number: str, part_number_or_query: str) -> dict:
             "SELECT name, price, image_url, product_url FROM parts WHERE ps_number = :ps"
         ), {"ps": ps_number}).mappings().first()
 
+        log = get_logger("tools.check_compatibility")
+
         if compat:
             return {
-                "compatible": True,
-                "ps_number": ps_number,
+                "compatible": True, "source": "db", "ps_number": ps_number,
                 "part_name": part["name"] if part else ps_number,
                 "reason": f"{ps_number} is compatible with model {model_number}.",
                 "alternative_parts": [],
             }
-        else:
+
+        from scrapers.model_lookup import model_lists_part
+        live = model_lists_part(model_number, ps_number)
+        if live is True:
+            log.info("compat live-confirmed ps=%s model=%s", ps_number, model_number)
             return {
-                "compatible": False,
-                "ps_number": ps_number,
+                "compatible": True, "source": "live", "ps_number": ps_number,
                 "part_name": part["name"] if part else ps_number,
-                "reason": f"{ps_number} is not confirmed compatible with model {model_number}.",
+                "reason": (
+                    f"{ps_number} appears compatible with model {model_number} "
+                    "(from a live PartSelect lookup — please confirm before ordering)."
+                ),
                 "alternative_parts": [],
             }
+        return {
+            "compatible": False, "source": "db" if live is False else "unverified",
+            "ps_number": ps_number,
+            "part_name": part["name"] if part else ps_number,
+            "reason": f"{ps_number} is not confirmed compatible with model {model_number}.",
+            "alternative_parts": [],
+        }
