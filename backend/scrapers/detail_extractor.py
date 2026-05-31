@@ -399,11 +399,11 @@ def run_details_batch(
             if not url:
                 continue
             seen_in += 1
-            if limit is not None and stats["processed"] + stats["skipped"] >= limit:
-                break
             if url in done:
                 stats["skipped"] += 1
                 continue
+            if limit is not None and stats["written"] >= limit:
+                break
             stats["processed"] += 1
             if rotate_every and stats["written"] and stats["written"] % rotate_every == 0:
                 driver.quit()

@@ -67,7 +67,12 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--headless", action="store_true", default=True)
     parser.add_argument("--no-headless", dest="headless", action="store_false")
-    parser.add_argument("--limit", type=int, default=None, help="Max product URLs per stage")
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=None,
+        help="Max new records to scrape this run (already-done URLs are skipped, not counted)",
+    )
     parser.add_argument("--backup", action="store_true", help="Backup existing raw JSONL first")
     args = parser.parse_args(argv)
 
