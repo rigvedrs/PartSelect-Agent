@@ -64,6 +64,13 @@ class ScopeSettings(BaseModel):
     out_of_scope_keywords: list[str]
 
 
+class CatalogSettings(BaseModel):
+    filtered_catalog_limit: int = 20
+    full_catalog_limit: int = 40
+    full_catalog_primary_source: str = "live"
+    db_completeness_min_parts: int = 5
+
+
 class Settings(BaseModel):
     database: DatabaseSettings
     redis: RedisSettings
@@ -73,6 +80,7 @@ class Settings(BaseModel):
     agent: AgentSettings
     cache: CacheSettings
     scope: ScopeSettings
+    catalog: CatalogSettings = CatalogSettings()
 
 
 def _default_config_path() -> Path:

@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from app.agent.part_context import resolve_ps_for_cart, match_parts_by_query
 from app.agent.guardrails import is_in_scope, reconcile_cart_intent, assert_tool_allowed
+from app.agent.catalog import CatalogScope
 from app.agent.router import classify_intent, extract_model_number, latest_utterance, Intent
 from app.agent.tools.search_parts import search_parts
 from app.agent.tools.check_compatibility import check_compatibility
@@ -48,11 +49,17 @@ def _resolve_model(message: str, appliance_model: str | None, session: dict | No
 
 
 
-def _parts_lookup_limit(intent: Intent, catalog_filter: str | None) -> int:
-    if intent == Intent.PARTS_FOR_MODEL and not catalog_filter:
-        return 40
+def _catalog_scope(classification) -> CatalogScope:
+    return CatalogScope.FULL if classification.browse_all_parts else CatalogScope.BY_PART_TYPE
+
+
+def _parts_lookup_limit(intent: Intent, scope: CatalogScope) -> int:
+    from app.config import load_settings
+    limits = load_settings().catalog
+    if scope == CatalogScope.FULL:
+        return limits.full_catalog_limit
     if intent == Intent.PARTS_FOR_MODEL:
-        return 20
+        return limits.filtered_catalog_limit
     return 10
 
 
@@ -105,6 +112,7 @@ async def chat(req: ChatRequest):
     )
     intent = reconcile_cart_intent(classification.intent, active)
     catalog_filter = classification.catalog_filter_query(appliance_model)
+    catalog_scope = _catalog_scope(classification)
     part_query = catalog_filter or active
     last_parts = get_last_parts(session)
     recent_parts = get_recent_parts(session)
@@ -128,7 +136,11 @@ async def chat(req: ChatRequest):
         pending_query = session.get("pending_part_query") or part_query
         clear_pending(session_id)
         if pending in ("search", "parts_for_model"):
-            result = list_compatible_parts(appliance_model, part_query=pending_query or None)
+            result = list_compatible_parts(
+                appliance_model,
+                scope=CatalogScope.BY_PART_TYPE,
+                part_type_filter=pending_query or None,
+            )
             return _respond(session_id, message, {
                 "session_id": session_id,
                 "text": result["reason"],
@@ -153,8 +165,9 @@ async def chat(req: ChatRequest):
         if not ps and model and catalog_filter:
             result = list_compatible_parts(
                 model,
-                part_query=catalog_filter,
-                limit=_parts_lookup_limit(Intent.SEARCH, catalog_filter),
+                scope=catalog_scope,
+                part_type_filter=catalog_filter,
+                limit=_parts_lookup_limit(Intent.SEARCH, catalog_scope),
             )
             return _respond(session_id, message, {
                 "session_id": session_id,
@@ -185,8 +198,9 @@ async def chat(req: ChatRequest):
             return {"session_id": session_id, "text": text}
         result = list_compatible_parts(
             model,
-            part_query=catalog_filter,
-            limit=_parts_lookup_limit(intent, catalog_filter),
+            scope=catalog_scope,
+            part_type_filter=catalog_filter,
+            limit=_parts_lookup_limit(intent, catalog_scope),
         )
         return _respond(session_id, message, {
             "session_id": session_id,
@@ -267,8 +281,9 @@ async def chat(req: ChatRequest):
             return {"session_id": session_id, "text": ask}
         result = list_compatible_parts(
             appliance_model,
-            part_query=part_query,
-            limit=_parts_lookup_limit(intent, catalog_filter),
+            scope=catalog_scope,
+            part_type_filter=catalog_filter,
+            limit=_parts_lookup_limit(intent, catalog_scope),
         )
         return _respond(session_id, message, {
             "session_id": session_id,
