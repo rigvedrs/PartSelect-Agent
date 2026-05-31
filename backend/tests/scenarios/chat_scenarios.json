@@ -48,9 +48,13 @@
     "expect": { "text_contains": "Removed" }
   },
   {
+    "id": "troubleshoot_dishwasher_draining",
+    "message": "Dishwasher not draining",
+    "expect": { "text_contains": "Instant-Repairman", "not_out_of_scope": true }
+  },
+  {
     "id": "troubleshoot_ice_maker",
-    "message": "my ice maker is not working",
-    "expect": { "has_text": true },
-    "requires_llm": true
+    "message": "The ice maker on my Whirlpool fridge is not working. How can I fix it?",
+    "expect": { "text_contains": "partselect.com/Repair" }
   }
 ]

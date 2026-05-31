@@ -16,8 +16,12 @@ from app.agent.tools.troubleshoot import troubleshoot_symptom
 from app.agent.tools.add_to_cart import add_to_cart
 from app.agent.tools.remove_from_cart import remove_from_cart
 from app.agent.graph import run_agent_streaming
+from app.agent.messages import TROUBLESHOOT_REDIRECT
 from app.services.chat_history_service import load_langchain_history, record_exchange
 from app.services.session_service import get_session, set_appliance_model, create_session
+from app.observability import get_logger, new_request_id
+
+log = get_logger("routers.chat")
 
 router = APIRouter(prefix="/api", tags=["chat"])
 
@@ -61,6 +65,8 @@ async def chat(req: ChatRequest):
     message = req.message.strip()
     latest = routing_query(message)
     appliance_model = _resolve_model(latest, req.appliance_model, session)
+    rid = new_request_id()
+    log.info("req=%s intent_msg=%r model=%r", rid, latest[:60], appliance_model or "")
 
     if not is_in_scope(latest):
         oos_text = (
@@ -75,6 +81,16 @@ async def chat(req: ChatRequest):
         }
 
     intent = classify_intent(message)
+
+    # Short greetings — deterministic, no LLM (avoids invented model assumptions)
+    if re.match(r"^(hi|hello|hey|good\s+(morning|afternoon|evening))\b", latest, re.I):
+        greet = (
+            "Hi! I can help with refrigerator and dishwasher parts — finding parts, "
+            "checking compatibility, installation steps, troubleshooting, and cart actions. "
+            "What do you need help with?"
+        )
+        record_exchange(session_id, message, greet)
+        return {"session_id": session_id, "text": greet}
 
     if intent == Intent.INSTALL:
         ps = _extract_ps(latest)
@@ -153,6 +169,10 @@ async def chat(req: ChatRequest):
             text = f"Added {ps} to your cart."
             record_exchange(session_id, message, text)
             return {"session_id": session_id, "text": text, "cart_update": result}
+
+    if intent == Intent.TROUBLESHOOT:
+        record_exchange(session_id, message, TROUBLESHOOT_REDIRECT)
+        return {"session_id": session_id, "text": TROUBLESHOOT_REDIRECT}
 
     if intent == Intent.SEARCH:
         results = search_parts(latest)
