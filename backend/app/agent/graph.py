@@ -1,6 +1,6 @@
 """LangGraph ReAct agent for complex / multi-step queries.
 
-Only invoked when the deterministic router returns Intent.COMPLEX or TROUBLESHOOT.
+Only invoked when the deterministic router returns Intent.COMPLEX.
 """
 from __future__ import annotations
 from typing import Annotated, AsyncIterator, TypedDict
@@ -15,7 +15,6 @@ from app.agent.tools.search_parts import search_parts
 from app.agent.tools.check_compatibility import check_compatibility
 from app.agent.tools.list_compatible_parts import list_compatible_parts
 from app.agent.tools.get_installation import get_installation_guide
-from app.agent.tools.troubleshoot import troubleshoot_symptom
 from app.agent.tools.add_to_cart import add_to_cart as _add_to_cart
 from app.agent.tools.remove_from_cart import remove_from_cart as _remove_from_cart
 from app.observability import get_logger
@@ -70,11 +69,6 @@ def _make_tools(session_id: str):
         return get_installation_guide(part_number)
 
     @tool
-    def troubleshoot_symptom_tool(symptom: str, appliance_type: str, brand: str | None = None) -> dict:
-        """Troubleshoot a symptom and get repair-guide matches."""
-        return troubleshoot_symptom(symptom, appliance_type, brand)
-
-    @tool
     def add_to_cart_tool(ps_number: str, quantity: int = 1) -> dict:
         """Add a part to the user's cart by PS number."""
         return _add_to_cart(session_id, ps_number, quantity)
@@ -89,7 +83,6 @@ def _make_tools(session_id: str):
         list_compatible_parts_tool,
         check_compatibility_tool,
         get_installation_guide_tool,
-        troubleshoot_symptom_tool,
         add_to_cart_tool,
         remove_from_cart_tool,
     ]
