@@ -18,7 +18,9 @@ from app.agent.tools.remove_from_cart import remove_from_cart
 from app.agent.graph import run_agent_streaming
 from app.agent.messages import TROUBLESHOOT_REDIRECT
 from app.services.chat_history_service import load_langchain_history, record_exchange
-from app.services.session_service import get_session, set_appliance_model, create_session
+from app.services.session_service import (
+    get_session, set_appliance_model, create_session, set_pending, clear_pending,
+)
 from app.observability import get_logger, new_request_id
 
 log = get_logger("routers.chat")
@@ -91,6 +93,16 @@ async def chat(req: ChatRequest):
         )
         record_exchange(session_id, message, greet)
         return {"session_id": session_id, "text": greet}
+
+    # Resolve a previously stored request now that we may have a model
+    if session and session.get("pending_intent") and appliance_model:
+        pending = session["pending_intent"]
+        part_query = session.get("pending_part_query") or ""
+        clear_pending(session_id)
+        if pending in ("search", "parts_for_model"):
+            result = list_compatible_parts(appliance_model, part_query=part_query or None)
+            record_exchange(session_id, message, result["reason"])
+            return {"session_id": session_id, "text": result["reason"], "parts": result["parts"]}
 
     if intent == Intent.INSTALL:
         ps = _extract_ps(latest)
@@ -175,14 +187,23 @@ async def chat(req: ChatRequest):
         return {"session_id": session_id, "text": TROUBLESHOOT_REDIRECT}
 
     if intent == Intent.SEARCH:
-        results = search_parts(latest)
-        text = f"Found {len(results)} part(s):"
-        record_exchange(session_id, message, text)
-        return {
-            "session_id": session_id,
-            "text": text,
-            "parts": results,
-        }
+        ps = _extract_ps(latest)
+        if ps:
+            results = search_parts(latest)
+            text = f"Found {len(results)} part(s):"
+            record_exchange(session_id, message, text)
+            return {"session_id": session_id, "text": text, "parts": results}
+        if not appliance_model:
+            set_pending(session_id, "search", latest)
+            ask = (
+                "Sure — what's your appliance model number? I'll find parts verified to fit it. "
+                "You can type it in the model field below or just reply with it here."
+            )
+            record_exchange(session_id, message, ask)
+            return {"session_id": session_id, "text": ask}
+        result = list_compatible_parts(appliance_model, part_query=latest)
+        record_exchange(session_id, message, result["reason"])
+        return {"session_id": session_id, "text": result["reason"], "parts": result["parts"]}
 
     history = load_langchain_history(session_id)
 

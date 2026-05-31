@@ -30,9 +30,16 @@
     "expect": { "min_parts": 1, "all_parts_have_compat_model": "10650502990" }
   },
   {
-    "id": "search_water_filter",
+    "id": "search_water_filter_asks_model",
     "message": "find a water filter for my fridge",
-    "expect": { "min_parts": 1 }
+    "expect": { "text_contains": "model number", "min_parts": 0 }
+  },
+  {
+    "id": "search_then_model_resolves",
+    "sequence": [
+      { "message": "find a water filter", "expect": { "text_contains": "model number" } },
+      { "message": "10650502990", "expect": { "min_parts": 1 } }
+    ]
   },
   {
     "id": "cart_add_remove",
