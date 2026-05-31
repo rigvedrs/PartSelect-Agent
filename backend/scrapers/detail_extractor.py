@@ -301,6 +301,59 @@ def _installation_meta(driver: webdriver.Chrome) -> dict[str, str | None]:
     return result
 
 
+def _installation_steps(driver: webdriver.Chrome) -> list[str]:
+    """Extract install guidance from product description and top customer instructions."""
+    steps: list[str] = []
+    seen: set[str] = set()
+
+    def add(text: str) -> None:
+        text = _squash(text)
+        if not text:
+            return
+        if "Other Parts Used:" in text:
+            text = text.split("Other Parts Used:")[0].strip()
+        if len(text) < 12 or text in seen:
+            return
+        if len(text) > 200 and not re.search(r"\b(snap|align|pop|position|install)\b", text, re.I):
+            return
+        seen.add(text)
+        steps.append(text)
+
+    desc = _description(driver)
+    if desc:
+        for sent in re.split(r"(?<=[.!])\s+", desc):
+            if re.search(r"\b(install|snap|align|attach|replace|tool-free|position)\b", sent, re.I):
+                add(sent)
+
+    try:
+        header = driver.find_element(By.ID, "InstallationInstructions")
+        if header.get_attribute("aria-expanded") != "true":
+            driver.execute_script("arguments[0].click();", header)
+            time.sleep(0.35)
+    except Exception:
+        pass
+
+    for el in driver.find_elements(By.CSS_SELECTOR, ".repair-story__instruction"):
+        add(el.text)
+        if len(steps) >= 5:
+            break
+
+    # Prefer concise customer instructions over long stories
+    short = [s for s in steps if len(s) <= 220]
+    if short:
+        steps = short + [s for s in steps if s not in short]
+
+    if not steps:
+        meta = _installation_meta(driver)
+        if meta.get("installation_complexity"):
+            hint = f"Rated {meta['installation_complexity']}"
+            if meta.get("installation_time"):
+                hint += f" — typical time {meta['installation_time']}"
+            add(hint)
+
+    return steps[:6]
+
+
 def _reviews(driver: webdriver.Chrome) -> dict[str, float | int | None]:
     rating_value = None
     try:
@@ -335,6 +388,13 @@ def extract_product_record(driver: webdriver.Chrome, url: str) -> dict[str, Any]
 
     url = clean_product_url(url) or url
     browser.navigate(driver, url)
+    try:
+        WebDriverWait(driver, 15).until(
+            EC.presence_of_element_located((By.CSS_SELECTOR, "h1, #InstallationInstructions"))
+        )
+    except TimeoutException:
+        pass
+    browser.brief_pause(0.5)
     title = None
     for css in ("h1.product-title", "h1#page-title", "h1[itemprop='name']", "h1"):
         hits = driver.find_elements(By.CSS_SELECTOR, css)
@@ -358,6 +418,7 @@ def extract_product_record(driver: webdriver.Chrome, url: str) -> dict[str, Any]
         "video_url": _youtube_link_from_page(driver),
         "installation_complexity": install["installation_complexity"],
         "installation_time": install["installation_time"],
+        "installation_steps": _installation_steps(driver),
         "symptoms": sym["symptoms"],
         "rating_value": reviews["rating_value"],
         "rating_count": reviews["rating_count"],

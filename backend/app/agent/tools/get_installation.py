@@ -11,7 +11,7 @@ def get_installation_guide(part_number: str) -> dict:
 
     with engine.connect() as conn:
         row = conn.execute(text(
-            "SELECT name, description, installation_steps, image_url, product_url "
+            "SELECT name, description, installation_steps, image_url, product_url, video_url "
             "FROM parts WHERE ps_number = :ps"
         ), {"ps": ps}).mappings().first()
 
@@ -21,6 +21,8 @@ def get_installation_guide(part_number: str) -> dict:
         steps = list(row["installation_steps"] or [])
         if not steps and row["description"]:
             steps = [row["description"]]
+        if not steps and row.get("video_url"):
+            steps = [f"Watch the installation video: {row['video_url']}"]
 
         return {
             "found": True,

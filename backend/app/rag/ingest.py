@@ -34,8 +34,10 @@ def _insert_part(conn, p: dict):
             name = EXCLUDED.name,
             price = EXCLUDED.price,
             stock_status = EXCLUDED.stock_status,
+            description = EXCLUDED.description,
             category = EXCLUDED.category,
             image_url = EXCLUDED.image_url,
+            video_url = EXCLUDED.video_url,
             installation_steps = EXCLUDED.installation_steps
     """), p)
 
