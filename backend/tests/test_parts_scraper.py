@@ -2,7 +2,7 @@ from scrapers.parts_scraper import parse_product
 
 
 def test_parse_product_extracts_price():
-    md = "# Refrigerator Door Shelf Bin\nIn Stock\nPrice: $47.40\n"
+    md = "# Refrigerator Door Shelf Bin\n\n$47.40\n\nIn Stock\n"
     result = parse_product("PS11752778", md)
     assert result["partselect_number"] == "PS11752778"
     assert result["price"] == "47.40"

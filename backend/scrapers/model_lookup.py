@@ -69,10 +69,12 @@ def scrape_model_parts(model: str, part_query: str | None = None) -> list[dict]:
         if ps in seen:
             continue
         seen.add(ps)
+        raw_url = url_m.group(1)
+        from scrapers.product_utils import clean_product_url
         entries.append({
             "ps_number": ps,
             "name": name,
-            "product_url": url_m.group(1),
+            "product_url": clean_product_url(raw_url) or raw_url,
         })
 
     kws = _query_keywords(part_query)

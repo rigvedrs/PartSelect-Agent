@@ -73,17 +73,19 @@ def get_part_by_ps(ps_number: str, fallback: dict | None = None) -> dict | None:
     if fresh and is_valid_part(fresh[0]):
         return fresh[0]
     if fallback and fallback.get("name"):
-        return {
+        stub = {
             "ps_number": ps,
             "name": fallback["name"],
             "product_url": fallback.get("product_url"),
-            "price": None,
-            "stock_status": None,
-            "brand": None,
-            "image_url": None,
+            "price": fallback.get("price"),
+            "stock_status": fallback.get("stock_status"),
+            "brand": fallback.get("brand"),
+            "image_url": fallback.get("image_url"),
             "description": None,
             "category": None,
         }
+        from app.agent.tools.part_enrichment import enrich_part_details
+        return enrich_part_details(stub, force_price_refresh=bool(stub.get("product_url")))
     return None
 
 

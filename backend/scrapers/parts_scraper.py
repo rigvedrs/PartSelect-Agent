@@ -10,22 +10,22 @@ import sys
 from pathlib import Path
 
 from scrapers.firecrawl_client import scrape_markdown
+from scrapers.product_utils import clean_product_url, parse_product_price
 
 OUT = Path(__file__).resolve().parents[1] / "data" / "raw" / "parts_sample.jsonl"
 URL_TMPL = "https://www.partselect.com/{ps}.htm"
 
 
 def parse_product(ps_number: str, md: str) -> dict:
-    price_match = re.search(r"\$([0-9]+\.[0-9]{2})", md)
     name_match = re.search(r"^#\s*(.+)", md, re.MULTILINE)
     return {
         "partselect_number": ps_number,
         "name": name_match.group(1).strip() if name_match else ps_number,
-        "price": price_match.group(1) if price_match else None,
+        "price": parse_product_price(md),
         "availability": "In Stock" if "in stock" in md.lower() else None,
         "description": md[:600],
         "model_cross_reference": [],
-        "product_url": URL_TMPL.format(ps=ps_number),
+        "product_url": URL_TMPL.format(ps=ps_number.upper()),
         "main_image": None,
     }
 
@@ -49,17 +49,18 @@ def main(ps_numbers: list[str]):
     print(f"wrote {len(records)} records -> {OUT}")
 
 
-def scrape_and_parse(ps_number: str) -> dict | None:
-    """Scrape PartSelect product page for a PS number and return parsed raw dict.
-    Returns None if scrape fails or page not found."""
+def scrape_and_parse(ps_number: str, product_url: str | None = None) -> dict | None:
+    """Scrape PartSelect product page for a PS number and return parsed raw dict."""
     ps = ps_number.upper()
     if not ps.startswith("PS"):
         ps = f"PS{ps}"
+    url = clean_product_url(product_url) or URL_TMPL.format(ps=ps)
     try:
-        md = scrape_markdown(URL_TMPL.format(ps=ps))
+        md = scrape_markdown(url)
         if not md or "page not found" in md.lower()[:800]:
             return None
         record = parse_product(ps, md)
+        record["product_url"] = url
         name = (record.get("name") or "").lower()
         if "page not found" in name:
             return None
