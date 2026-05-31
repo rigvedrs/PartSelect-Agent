@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-import json
 from typing import Any, AsyncIterator
+
+from app.json_util import dumps_json
 
 
 def sse_line(data: dict[str, Any]) -> bytes:
-    return f"data: {json.dumps(data, ensure_ascii=False)}\n\n".encode()
+    return f"data: {dumps_json(data)}\n\n".encode()
 
 
 def sse_token(token: str) -> bytes:

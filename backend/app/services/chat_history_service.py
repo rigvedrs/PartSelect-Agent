@@ -3,33 +3,22 @@
 from __future__ import annotations
 
 import json
-from decimal import Decimal
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage
 from sqlalchemy import text
 
 from app.db.engine import get_engine
+from app.json_util import json_safe
 
 MAX_HISTORY_MESSAGES = 12  # last ~6 turns; keeps LLM focused on recent context
 MAX_UI_MESSAGES = 100
 
 
-def _json_safe(value: Any) -> Any:
-    """Make metadata JSON-serializable (e.g. Decimal prices from DB rows)."""
-    if isinstance(value, Decimal):
-        return float(value)
-    if isinstance(value, dict):
-        return {k: _json_safe(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_json_safe(v) for v in value]
-    return value
-
-
 def _metadata_json(metadata: dict[str, Any] | None) -> str | None:
     if not metadata:
         return None
-    cleaned = {k: _json_safe(v) for k, v in metadata.items() if v is not None}
+    cleaned = {k: json_safe(v) for k, v in metadata.items() if v is not None}
     return json.dumps(cleaned) if cleaned else None
 
 
