@@ -1,13 +1,73 @@
+"""LLM intent router — single structured call using the tool model."""
 from __future__ import annotations
+
 import re
 from enum import Enum
 
+from langchain_core.messages import HumanMessage, SystemMessage
+from pydantic import BaseModel, Field
+
+from app.agent.llm_provider import get_classifier_llm
+from app.observability import get_logger
+
+log = get_logger("agent.router")
+
 _PS_PATTERN = re.compile(r"\bPS\d{5,}\b", re.IGNORECASE)
-# Alphanumeric (WRS325SDHZ) or numeric-only OEM model numbers (10640262010)
 _MODEL_PATTERN = re.compile(
     r"\b(?:[A-Z]{2,6}\d{3,}[A-Z0-9]*|\d{6,14})\b",
     re.IGNORECASE,
 )
+
+_CLASSIFIER_PROMPT = """You route messages for a PartSelect refrigerator and dishwasher parts assistant.
+
+Choose exactly one intent:
+- greeting: hi, hello, thanks, goodbye
+- search: user wants to find/order a part type (water filter, screw, hinge, tube kit)
+- parts_for_model: list or browse parts for their appliance model (with or without a part type)
+- compatibility: check if one specific PS##### part fits a model — requires a PS number in the message
+- install: installation instructions for a part
+- troubleshoot: appliance broken, not working, leaking, how to fix/repair
+- add_to_cart: add a part to cart
+- remove_from_cart: remove a part from cart
+- general: anything else or multi-step requests
+
+Rules:
+- Extract ps_number (PS#####) when present in the message.
+- For add_to_cart/remove_from_cart with pronouns ("it", "that one"): leave ps_number null — the app resolves from the latest shown parts.
+- compatibility ONLY when both a PS number and model context appear; otherwise use search or parts_for_model.
+- For search/parts_for_model, set part_query to the part type only (e.g. "water filter", "door hinge").
+- Use session model context when the user says "for it", "same model", "its parts".
+- Prefer parts_for_model when listing parts for a named model; search when finding a part type."""
+
+
+class Intent(str, Enum):
+    GREETING = "greeting"
+    SEARCH = "search"
+    PARTS_FOR_MODEL = "parts_for_model"
+    COMPATIBILITY = "compatibility"
+    INSTALL = "install"
+    TROUBLESHOOT = "troubleshoot"
+    ADD_TO_CART = "add_to_cart"
+    REMOVE_FROM_CART = "remove_from_cart"
+    GENERAL = "general"
+
+
+class IntentResult(BaseModel):
+    intent: Intent
+    part_query: str | None = Field(
+        default=None,
+        description="Part type or description for search/parts_for_model",
+    )
+    ps_number: str | None = Field(
+        default=None,
+        description="PartSelect PS number if mentioned",
+    )
+
+
+def latest_utterance(message: str) -> str:
+    """Last non-empty line — used when a message contains prior context."""
+    lines = [ln.strip() for ln in message.strip().splitlines() if ln.strip()]
+    return lines[-1] if lines else message.strip()
 
 
 def extract_model_number(message: str) -> str | None:
@@ -19,106 +79,86 @@ def extract_model_number(message: str) -> str | None:
     return None
 
 
-class Intent(str, Enum):
-    INSTALL = "install"
-    COMPATIBILITY = "compatibility"
-    PARTS_FOR_MODEL = "parts_for_model"
-    TROUBLESHOOT = "troubleshoot"
-    SEARCH = "search"
-    ADD_TO_CART = "add_to_cart"
-    REMOVE_FROM_CART = "remove_from_cart"
-    COMPLEX = "complex"
+def _guess_part_query(message: str) -> str | None:
+    m = re.search(r"what\s+(.+?)\s+parts?\s", message, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    m = re.search(r"(?:find|need|looking for)\s+(?:a\s+)?(.+?)(?:\s+for|\?|$)", message, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+    return None
 
 
-_INSTALL_KW = ("install", "installation", "how to install", "replace", "how do i put")
-_COMPAT_KW = ("compatible", "compatibility", "fit", "work with", "work on", "fits")
-_PARTS_FOR_MODEL_KW = (
-    "compatible parts", "parts compatible", "parts for my", "parts that fit",
-    "what parts fit", "which parts fit", "list parts", "show parts for",
-    "parts work with", "fits my model", "for my model",
-    "list all", "all parts", "all its parts", "its parts", "every part",
-)
-_TROUBLE_KW = (
-    "not working", "broken", "leaking", "won't", "wont", "doesn't", "doesnt",
-    "stopped", "noise", "error", "problem", "issue", "not cooling",
-    "not draining", "not heating", "not dispensing",
-    "how to fix", "how can i fix", "how do i fix", "fix it", "fix my",
-)
-_CART_ADD_KW = ("add to cart", "add to my cart", "to cart")
-_CART_REMOVE_KW = (
-    "remove from cart", "delete from cart", "remove from my cart",
-    "take out of cart", "take off cart", "remove it from cart",
-)
-_SEARCH_KW = (
-    "find", "search", "look up", "show me", "what is", "price of", "need a", "looking for",
-    "is there", "do you have", "got a", "get a", "get me",
-)
-
-
-def routing_query(message: str) -> str:
-    """Intent classification uses only the latest user utterance (last line or sentence)."""
-    text = (message or "").strip()
-    if not text:
-        return text
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    if len(lines) > 1:
-        return lines[-1]
-    sentences = re.split(r"(?<=[.!?])\s+", text)
-    sentences = [s.strip() for s in sentences if s.strip()]
-    if len(sentences) > 1:
-        return sentences[-1]
-    return text
-
-
-def classify_intent(message: str) -> Intent:
-    """Classify intent from the latest query fragment only (not prior chat turns)."""
-    message = routing_query(message)
+def _fallback_classification(message: str) -> IntentResult:
+    """Minimal regex fallback if the LLM call fails."""
+    ps = _PS_PATTERN.search(message)
+    ps_number = ps.group(0).upper() if ps else None
     lower = message.lower()
-    has_ps = bool(_PS_PATTERN.search(message))
-    has_model = extract_model_number(message) is not None
+    model = extract_model_number(message)
 
-    has_remove = any(kw in lower for kw in _CART_REMOVE_KW) or (
-        "remove" in lower and "cart" in lower
-    )
-    has_cart_add = any(kw in lower for kw in _CART_ADD_KW) or (
-        "add" in lower and "cart" in lower
-    )
-    has_order_intent = any(kw in lower for kw in ("order", "buy", "purchase"))
-    has_install = any(kw in lower for kw in _INSTALL_KW)
-    has_compat = any(kw in lower for kw in _COMPAT_KW)
-    has_parts_for_model = any(kw in lower for kw in _PARTS_FOR_MODEL_KW)
-    has_trouble = any(kw in lower for kw in _TROUBLE_KW)
-    has_search = any(kw in lower for kw in _SEARCH_KW)
-
-    if has_remove:
-        return Intent.REMOVE_FROM_CART
-
-    intents_detected = sum([
-        has_cart_add, has_install, has_compat and not has_parts_for_model, has_trouble,
-        has_parts_for_model, has_order_intent,
-    ])
-    if intents_detected > 1:
-        return Intent.COMPLEX
-
-    if has_cart_add and has_ps:
-        return Intent.ADD_TO_CART
-    if has_install and has_ps:
-        return Intent.INSTALL
-    if has_compat and has_ps and (has_model or has_compat):
-        return Intent.COMPATIBILITY
-    if has_parts_for_model or (has_compat and has_model and not has_ps):
-        return Intent.PARTS_FOR_MODEL
-    if has_compat and has_ps:
-        return Intent.COMPATIBILITY
-    if has_trouble:
-        return Intent.TROUBLESHOOT
-    if has_search or (has_ps and not has_compat):
-        return Intent.SEARCH
-
-    return Intent.COMPLEX
+    if re.match(r"^(hi|hello|hey|good\s+(morning|afternoon|evening))\b", lower):
+        return IntentResult(intent=Intent.GREETING)
+    if ps_number and "cart" in lower:
+        if "remove" in lower or "delete" in lower:
+            return IntentResult(intent=Intent.REMOVE_FROM_CART, ps_number=ps_number)
+        if "add" in lower:
+            return IntentResult(intent=Intent.ADD_TO_CART, ps_number=ps_number)
+    if "cart" in lower or re.search(r"\badd\s+it\b", lower):
+        if "remove" in lower or "delete" in lower:
+            return IntentResult(intent=Intent.REMOVE_FROM_CART)
+        if "add" in lower or re.search(r"\badd\s+it\b", lower):
+            return IntentResult(intent=Intent.ADD_TO_CART)
+    if ps_number and "install" in lower:
+        return IntentResult(intent=Intent.INSTALL, ps_number=ps_number)
+    if ps_number and model:
+        return IntentResult(intent=Intent.COMPATIBILITY, ps_number=ps_number)
+    if model and not ps_number and any(k in lower for k in ("compatible", "parts", "fit")):
+        return IntentResult(intent=Intent.PARTS_FOR_MODEL, part_query=_guess_part_query(message))
+    if any(k in lower for k in ("not working", "leaking", "not draining", "how to fix", "repair")):
+        return IntentResult(intent=Intent.TROUBLESHOOT)
+    if any(k in lower for k in ("find", "need", "looking for", "search")):
+        return IntentResult(intent=Intent.SEARCH, ps_number=ps_number, part_query=_guess_part_query(message))
+    return IntentResult(intent=Intent.GENERAL, ps_number=ps_number)
 
 
-def looks_like_part_search(message: str) -> bool:
-    """True when a message is likely a part lookup (used for session-aware COMPLEX fallback)."""
-    lower = routing_query(message).lower()
-    return any(kw in lower for kw in _SEARCH_KW)
+async def classify_intent(
+    message: str,
+    session_model: str | None = None,
+    last_parts: list[dict] | None = None,
+) -> IntentResult:
+    """Classify user intent via the tool LLM with structured output."""
+    text = latest_utterance(message)
+    if not text:
+        return IntentResult(intent=Intent.GENERAL)
+
+    context: list[str] = []
+    if session_model:
+        context.append(f"Known appliance model: {session_model}")
+    if last_parts:
+        shown = ", ".join(
+            f"{p['ps_number']} ({p.get('name') or 'part'})" for p in last_parts[:5]
+        )
+        context.append(f"Latest shown parts (most recent reply): {shown}")
+
+    user_content = text
+    if context:
+        user_content = f"[{' | '.join(context)}]\n{text}"
+
+    try:
+        llm = get_classifier_llm().with_structured_output(
+            IntentResult, method="function_calling",
+        )
+        result: IntentResult = await llm.ainvoke([
+            SystemMessage(content=_CLASSIFIER_PROMPT),
+            HumanMessage(content=user_content),
+        ])
+        if result.ps_number:
+            result.ps_number = result.ps_number.upper()
+        log.info(
+            "classified intent=%s part_query=%r ps=%r",
+            result.intent.value, result.part_query, result.ps_number,
+        )
+        return result
+    except Exception:
+        log.exception("LLM intent classification failed, using fallback")
+        return _fallback_classification(text)
