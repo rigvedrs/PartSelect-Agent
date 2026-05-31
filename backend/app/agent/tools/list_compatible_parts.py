@@ -47,6 +47,9 @@ def list_compatible_parts(
     limit: int = 10,
 ) -> dict:
     """Return parts with a compatibility row for this model. Optional keyword filter."""
+    from app.agent.router import normalize_part_query
+    part_query = normalize_part_query(part_query)
+
     model = (model_number or "").strip()
     if not model:
         return {

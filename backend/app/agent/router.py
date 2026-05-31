@@ -18,6 +18,16 @@ _MODEL_PATTERN = re.compile(
     re.IGNORECASE,
 )
 
+_PLACEHOLDER_PART_QUERY = frozenset({
+    "null", "none", "nil", "n/a", "na", "undefined", "empty",
+})
+_LIST_ALL_PARTS_RE = re.compile(
+    r"\b(?:list|show|see|get|browse)\s+(?:all|every|available)\b.*\bparts?\b|"
+    r"\ball\s+(?:of\s+)?(?:its|the|my)?\s*parts?\b|"
+    r"\bparts?\s+for\s+(?:it|this|that|the)\s+(?:model|appliance|fridge|refrigerator)\b",
+    re.IGNORECASE,
+)
+
 _CLASSIFIER_PROMPT = """You route messages for a PartSelect refrigerator and dishwasher parts assistant.
 
 Choose exactly one intent:
@@ -36,6 +46,7 @@ Rules:
 - For add_to_cart/remove_from_cart with pronouns ("it", "that one"): leave ps_number null — the app resolves from the latest shown parts.
 - compatibility ONLY when both a PS number and model context appear; otherwise use search or parts_for_model.
 - For search/parts_for_model, set part_query to the part type only (e.g. "water filter", "door hinge").
+- When the user wants ALL parts for a model (e.g. "list all its parts"), leave part_query empty/null.
 - Use session model context when the user says "for it", "same model", "its parts".
 - Prefer parts_for_model when listing parts for a named model; search when finding a part type."""
 
@@ -62,6 +73,27 @@ class IntentResult(BaseModel):
         default=None,
         description="PartSelect PS number if mentioned",
     )
+
+
+def normalize_part_query(part_query: str | None, message: str | None = None) -> str | None:
+    """Drop LLM placeholder strings and 'list all parts' requests (no keyword filter)."""
+    if message and _LIST_ALL_PARTS_RE.search(message):
+        return None
+    if not part_query:
+        return None
+    cleaned = str(part_query).strip()
+    if not cleaned or cleaned.lower() in _PLACEHOLDER_PART_QUERY:
+        return None
+    return cleaned
+
+
+def normalize_ps_number(ps_number: str | None) -> str | None:
+    if not ps_number:
+        return None
+    cleaned = str(ps_number).strip().upper()
+    if cleaned in ("NULL", "NONE", "N/A", ""):
+        return None
+    return cleaned
 
 
 def latest_utterance(message: str) -> str:
@@ -152,8 +184,8 @@ async def classify_intent(
             SystemMessage(content=_CLASSIFIER_PROMPT),
             HumanMessage(content=user_content),
         ])
-        if result.ps_number:
-            result.ps_number = result.ps_number.upper()
+        result.ps_number = normalize_ps_number(result.ps_number)
+        result.part_query = normalize_part_query(result.part_query, text)
         log.info(
             "classified intent=%s part_query=%r ps=%r",
             result.intent.value, result.part_query, result.ps_number,
