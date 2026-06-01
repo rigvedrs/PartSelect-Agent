@@ -2,6 +2,8 @@ import os
 import tomli
 from dotenv import load_dotenv
 from pathlib import Path
+from typing import Literal
+
 from pydantic import BaseModel
 
 
@@ -71,6 +73,11 @@ class CatalogSettings(BaseModel):
     db_completeness_min_parts: int = 5
 
 
+class LiveScrapeSettings(BaseModel):
+    enabled: bool = False
+    backend: Literal["firecrawl", "selenium"] = "firecrawl"
+
+
 class Settings(BaseModel):
     database: DatabaseSettings
     redis: RedisSettings
@@ -81,6 +88,7 @@ class Settings(BaseModel):
     cache: CacheSettings
     scope: ScopeSettings
     catalog: CatalogSettings = CatalogSettings()
+    live_scrape: LiveScrapeSettings = LiveScrapeSettings()
 
 
 def _default_config_path() -> Path:

@@ -83,12 +83,18 @@ def _resolve_live_catalog(
     limit: int,
     *,
     full_catalog: bool,
+    existing_parts: list[dict] | None = None,
 ) -> dict:
     from app.live_scrape.gateway import get_gateway
     from app.observability import get_logger, span
 
     log = get_logger("agent.catalog")
     gw = get_gateway()
+    existing_by_ps = {
+        str(part.get("ps_number", "")).upper(): part
+        for part in (existing_parts or [])
+        if part.get("ps_number")
+    }
 
     with span("live"):
         page_result = gw.fetch_model_parts(model, part_type_filter)
@@ -104,6 +110,9 @@ def _resolve_live_catalog(
                 row = dict(detail.data)
             else:
                 row = dict(stub)
+            existing = existing_by_ps.get(str(row.get("ps_number", "")).upper())
+            if existing and not row.get("image_url") and existing.get("image_url"):
+                row["image_url"] = existing["image_url"]
             row["compat_model"] = model
             row["source"] = "live"
             row["backend"] = page_result.backend
@@ -150,7 +159,9 @@ def resolve_compatible_parts(request: CatalogRequest) -> dict:
                 log.info("catalog scope=full source=db model=%s n=%d", model, len(db))
                 return _package(model, db, CatalogSource.DB, full_catalog=True)
             if live_enabled:
-                return _resolve_live_catalog(model, None, limit, full_catalog=True)
+                return _resolve_live_catalog(
+                    model, None, limit, full_catalog=True, existing_parts=db
+                )
             return _package(model, [], CatalogSource.NONE, full_catalog=True)
 
         limit = min(max(request.limit, 1), catalog_cfg.filtered_catalog_limit)
@@ -166,7 +177,11 @@ def resolve_compatible_parts(request: CatalogRequest) -> dict:
 
         if live_enabled:
             return _resolve_live_catalog(
-                model, request.part_type_filter, limit, full_catalog=False
+                model,
+                request.part_type_filter,
+                limit,
+                full_catalog=False,
+                existing_parts=db,
             )
 
     if request.part_type_filter:

@@ -10,6 +10,8 @@ def test_loads_database_and_models():
     assert s.embeddings.dim == 384
     assert s.llm.tool_temperature == 0.0
     assert "refrigerator" in s.scope.appliance_keywords
+    assert s.live_scrape.enabled is True
+    assert s.live_scrape.backend == "firecrawl"
 
 def test_database_url_is_psycopg():
     s = load_settings(CONFIG)

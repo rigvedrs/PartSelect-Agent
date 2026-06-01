@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from contextlib import contextmanager
 from typing import Iterator
 
@@ -10,21 +9,21 @@ from app.observability import get_logger
 
 log = get_logger("scrapers.runtime_fetch")
 
-# PartSelect blocks simple HTTP clients (Akamai). Selenium uses a real browser.
-_DEFAULT_BACKEND = "selenium"
-
 
 def live_scrape_backend() -> str:
-    """selenium (default, free) or firecrawl when explicitly configured + keyed."""
-    backend = os.getenv("LIVE_SCRAPE_BACKEND", _DEFAULT_BACKEND).strip().lower()
-    if backend == "firecrawl" and os.getenv("FIRECRAWL_API_KEY"):
-        return "firecrawl"
-    return "selenium"
+    """selenium or firecrawl — reads config.toml [live_scrape] with env override."""
+    from app.live_scrape import settings as live_settings
+
+    if not live_settings.is_enabled():
+        return "selenium"
+    return live_settings.resolve_backend()
 
 
 def live_scrape_available() -> bool:
-    """True when runtime live lookup can run (Selenium is always attempted locally)."""
-    return live_scrape_backend() in ("selenium", "firecrawl")
+    """True when live scrape is enabled and the configured backend can run."""
+    from app.live_scrape import settings as live_settings
+
+    return live_settings.is_available()
 
 
 @contextmanager

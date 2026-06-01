@@ -38,6 +38,33 @@ def _scrape_via_selenium(ps: str, url: str) -> dict | None:
     return record
 
 
+def _resolve_url(ps: str, product_url: str | None) -> str:
+    from scrapers.url_resolver import resolve_product_url
+
+    url = clean_product_url(product_url) or URL_TMPL.format(ps=ps)
+    if product_url:
+        return url
+    resolved = resolve_product_url(ps)
+    return resolved or url
+
+
+def scrape_installation_record(ps_number: str, product_url: str | None = None) -> dict | None:
+    """Scrape product page for installation steps — always uses Selenium DOM extraction."""
+    ps = ps_number.upper()
+    if not ps.startswith("PS"):
+        ps = f"PS{ps}"
+    url = _resolve_url(ps, product_url)
+    record = _scrape_via_selenium(ps, url)
+    if record:
+        return record
+    if not product_url:
+        return None
+    resolved = _resolve_url(ps, None)
+    if resolved != url:
+        return _scrape_via_selenium(ps, resolved)
+    return None
+
+
 def scrape_and_parse(ps_number: str, product_url: str | None = None) -> dict | None:
     """Scrape PartSelect product page and return parsed raw dict."""
     from scrapers.runtime_fetch import live_scrape_available, live_scrape_backend, fetch_markdown
@@ -53,8 +80,17 @@ def scrape_and_parse(ps_number: str, product_url: str | None = None) -> dict | N
     try:
         if live_scrape_backend() == "selenium":
             record = _scrape_via_selenium(ps, url)
+            if not record and not product_url:
+                resolved = _resolve_url(ps, None)
+                if resolved != url:
+                    record = _scrape_via_selenium(ps, resolved)
         else:
             md = fetch_markdown(url)
+            if not md or "page not found" in md.lower()[:800]:
+                resolved = _resolve_url(ps, None)
+                if resolved != url:
+                    url = resolved
+                    md = fetch_markdown(url)
             if not md or "page not found" in md.lower()[:800]:
                 return None
             record = parse_product(ps, md)

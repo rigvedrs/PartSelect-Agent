@@ -37,7 +37,11 @@ filtered_catalog_limit = 20
 full_catalog_limit = 40
 full_catalog_primary_source = "none" # db, live or none — runtime uses DB only
 db_completeness_min_parts = 5
-# Runtime live scrape: selenium (default, free + Chrome) or firecrawl (paid, set LIVE_SCRAPE_BACKEND=firecrawl)
+
+[live_scrape]
+# Temporary runtime fallback until bulk ingest is complete. Set enabled = false to disable.
+enabled = true
+backend = "firecrawl" # firecrawl | selenium — FIRECRAWL_API_KEY required for firecrawl
 
 [cache]
 product_ttl_seconds = 86400

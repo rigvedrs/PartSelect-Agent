@@ -403,7 +403,8 @@ async def _chat_inner(req: ChatRequest, rid: str, trace) -> dict[str, Any] | Str
     if intent == Intent.REMOVE_FROM_CART:
         assert_tool_allowed(intent, "remove_from_cart")
         if ps:
-            result = remove_from_cart(session_id, ps)
+            with span("cart"):
+                result = remove_from_cart(session_id, ps)
             text = (
                 f"Removed {ps} from your cart."
                 if result.get("success")
@@ -425,7 +426,8 @@ async def _chat_inner(req: ChatRequest, rid: str, trace) -> dict[str, Any] | Str
     if intent == Intent.ADD_TO_CART:
         assert_tool_allowed(intent, "add_to_cart")
         if ps:
-            result = add_to_cart(session_id, ps, part_hint=get_part_hint(session, ps))
+            with span("cart"):
+                result = add_to_cart(session_id, ps, part_hint=get_part_hint(session, ps))
             if result.get("success"):
                 text = f"Added {ps} to your cart."
             else:

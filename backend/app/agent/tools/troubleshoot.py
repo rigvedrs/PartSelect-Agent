@@ -6,6 +6,7 @@ from sqlalchemy import text
 from app.db.engine import get_engine
 from app.rag.embedder import embed_one
 from app.config import load_settings
+from app.observability import span
 
 
 def detect_appliance_type(message: str) -> str:
@@ -20,7 +21,8 @@ def retrieve_troubleshoot_context(symptom: str, appliance_type: str) -> dict:
     settings = load_settings()
     engine = get_engine()
     top_k = settings.retrieval.top_k
-    vec_str = str(embed_one(f"{appliance_type} {symptom}"))
+    with span("rag_embed"):
+        vec_str = str(embed_one(f"{appliance_type} {symptom}"))
 
     with engine.connect() as conn:
         repair_rows = conn.execute(text("""

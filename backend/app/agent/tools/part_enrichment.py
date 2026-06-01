@@ -25,6 +25,10 @@ def enrich_part_details(part: dict, *, force_price_refresh: bool = False) -> dic
     if not part.get("ps_number"):
         return part
 
+    from app.live_scrape.gateway import get_gateway
+    if not get_gateway().is_enabled():
+        return part
+
     product_url = part.get("product_url")
     if not needs_enrichment(part) and not (force_price_refresh and product_url):
         return part

@@ -71,13 +71,14 @@ def _fallback_body(appliance: str) -> str:
 
 def prepare_troubleshoot(message: str) -> dict:
     """Run RAG once; reuse for streaming and metadata."""
-    appliance, ctx = _prepare_context(message)
-    return {
-        "appliance": appliance,
-        "ctx": ctx,
-        "context_text": format_context_for_llm(ctx),
-        "parts": ctx["parts"] or None,
-    }
+    with span("rag_prepare"):
+        appliance, ctx = _prepare_context(message)
+        return {
+            "appliance": appliance,
+            "ctx": ctx,
+            "context_text": format_context_for_llm(ctx),
+            "parts": ctx["parts"] or None,
+        }
 
 
 async def stream_troubleshoot_answer(

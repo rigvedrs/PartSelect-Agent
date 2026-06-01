@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator
 
 from app.agent.llm_provider import get_classifier_llm
 from app.config import load_settings
-from app.observability import get_logger, log_event, safe_preview
+from app.observability import get_logger, log_event, safe_preview, span
 
 log = get_logger("agent.router")
 
@@ -217,10 +217,11 @@ async def classify_intent(
         llm = get_classifier_llm().with_structured_output(
             IntentResult, method="function_calling",
         )
-        result: IntentResult = await llm.ainvoke([
-            SystemMessage(content=_CLASSIFIER_PROMPT),
-            HumanMessage(content=user_content),
-        ])
+        with span("classifier"):
+            result: IntentResult = await llm.ainvoke([
+                SystemMessage(content=_CLASSIFIER_PROMPT),
+                HumanMessage(content=user_content),
+            ])
         log.info(
             "classified intent=%s browse_all=%s part_query=%r ps=%r",
             result.intent.value, result.browse_all_parts, result.part_query, result.ps_number,

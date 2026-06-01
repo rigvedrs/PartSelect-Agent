@@ -185,49 +185,6 @@ def _description(driver: webdriver.Chrome) -> str | None:
     return None
 
 
-def _youtube_watch_url(url_or_id: str) -> str | None:
-    if not url_or_id:
-        return None
-    m = re.search(r"/embed/([A-Za-z0-9_-]{6,})", url_or_id)
-    if m:
-        return f"https://www.youtube.com/watch?v={m.group(1)}"
-    m = re.search(r"(?:v=|youtu\.be/)([A-Za-z0-9_-]{6,})", url_or_id)
-    if m:
-        return f"https://www.youtube.com/watch?v={m.group(1)}"
-    if re.fullmatch(r"[A-Za-z0-9_-]{6,}", url_or_id.strip()):
-        return f"https://www.youtube.com/watch?v={url_or_id.strip()}"
-    return None
-
-
-def _youtube_link_from_page(driver: webdriver.Chrome) -> str | None:
-    """Extract a YouTube watch URL from page HTML — link only, no video download or UI expand."""
-    html = driver.page_source or ""
-
-    for pattern in (
-        r"https?://(?:www\.)?youtube\.com/watch\?v=([A-Za-z0-9_-]{6,})",
-        r"https?://(?:www\.)?youtube\.com/embed/([A-Za-z0-9_-]{6,})",
-        r"https?://youtu\.be/([A-Za-z0-9_-]{6,})",
-        r"img\.youtube\.com/vi/([A-Za-z0-9_-]{6,})/",
-        r'data-yt-init="([A-Za-z0-9_-]{6,})"',
-        r"data-yt=\"([A-Za-z0-9_-]{6,})\"",
-    ):
-        m = re.search(pattern, html)
-        if m:
-            watch = _youtube_watch_url(m.group(1))
-            if watch:
-                return watch
-
-    # Fallback: collapsed PartVideos section (no long wait / no click)
-    try:
-        for fr in driver.find_elements(By.CSS_SELECTOR, "iframe[src*='youtube'], iframe[src*='youtu.be']"):
-            watch = _youtube_watch_url(fr.get_attribute("src") or "")
-            if watch:
-                return watch
-    except Exception:
-        pass
-    return None
-
-
 def _symptoms_and_replaces(driver: webdriver.Chrome) -> dict[str, list[str] | None]:
     out: dict[str, list[str] | None] = {"symptoms": None, "replaces": None}
 
@@ -415,7 +372,7 @@ def extract_product_record(driver: webdriver.Chrome, url: str) -> dict[str, Any]
         "manufactured_for": _manufactured_for(driver),
         "description": _description(driver),
         "replaces": sym["replaces"],
-        "video_url": _youtube_link_from_page(driver),
+        "video_url": None,
         "installation_complexity": install["installation_complexity"],
         "installation_time": install["installation_time"],
         "installation_steps": _installation_steps(driver),
