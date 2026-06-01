@@ -1,17 +1,17 @@
 import React from "react";
 import "./ProductCard.css";
 
-const FALLBACK = "https://placehold.co/280x120?text=No+Image";
-
 export default function ProductCard({ part, onAddToCart }) {
   if (!part) return null;
   return (
     <div className="product-card">
-      <img
-        src={part.image_url || FALLBACK}
-        alt={part.name}
-        onError={(e) => { e.target.src = FALLBACK; }}
-      />
+      {part.image_url && (
+        <img
+          src={part.image_url}
+          alt={part.name}
+          onError={(e) => { e.currentTarget.style.display = "none"; }}
+        />
+      )}
       <div className="part-name">{part.name}</div>
       <div className="part-meta">PS# {part.ps_number}{part.brand ? ` · ${part.brand}` : ""}</div>
       {part.price != null && (

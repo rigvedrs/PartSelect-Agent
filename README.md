@@ -39,15 +39,15 @@ User ──► React Chat Widget (port 3000)
 
 **Data:** PostgreSQL 16 + pgvector HNSW index for semantic search. Embeddings generated locally via `sentence-transformers/all-MiniLM-L6-v2` (384 dimensions). Parts, compatibility, repair guides, and articles are ingested from JSONL under `backend/data/raw/`.
 
-**Live fallback:** When a PS number or model page is not in the database, tools use **Selenium + Chrome** (free, default) to scrape PartSelect and return results in the same request. Optional: set `LIVE_SCRAPE_BACKEND=firecrawl` + `FIRECRAWL_API_KEY` for a paid API path that avoids spinning up a browser per request.
+**Live fallback:** When a PS number or model page is not in the database, tools can live-scrape PartSelect (config-toggleable). Control via `[live_scrape]` in `config.toml` — set `enabled = true` and `backend = "firecrawl"` (default) or `"selenium"`. Requires `FIRECRAWL_API_KEY` in `.env` for Firecrawl. Results are ephemeral (not written to DB except when explicitly adding to cart). Set `enabled = false` after bulk ingest is complete.
 
 ---
 
 ## Embeddable chat widget
 
-The frontend is a floating chat widget that can run as the standalone local demo or be embedded into another web page.
+The frontend is a floating chat widget that can run as the standalone local test or be embedded into another web page.
 
-For the local demo, open the normal React app at `http://localhost:3000`.
+For the local test, open the normal React app at `http://localhost:3000`.
 
 For an embedded page, include the built frontend CSS and JS assets from `frontend/build/asset-manifest.json` and add this mount point:
 
@@ -81,7 +81,9 @@ Every chat message goes through the same pipeline:
 5. **Pending slot completion** — if the session has a `pending_intent` (e.g. user searched for a part type without a model) and the current message supplies a model number, the pending search runs **before** the classified intent handler, preserving the original part-type query.
 6. **Handler** — run the matching deterministic handler or, for `general` only, stream through the LangGraph agent.
 
-**Streaming:** When `stream: true` (default), all responses use **Server-Sent Events** (`text/event-stream`). LLM paths (`troubleshoot`, `general`) emit token chunks as they are generated; deterministic handlers emit a single `done` event with the full payload (parts, cart updates, etc.).
+**Streaming:** When `stream: true` (default), all responses use **Server-Sent Events** (`text/event-stream`). The backend emits friendly live progress `stage` events first (for example `Understanding your request...`, `Checking matching parts...`, `Putting the answer together...`) so the chat popup can show real backend progress while work is happening. LLM paths (`troubleshoot`, `general`) then emit token chunks as they are generated; deterministic handlers emit a final `done` event with the full payload (parts, cart updates, etc.).
+
+The frontend displays the latest progress stage in the pending assistant bubble and removes it as soon as answer text or the final response arrives.
 
 Handlers record exchanges in `session_messages` and update `last_parts_json` whenever parts are returned, so follow-up turns ("add it", "remove that filter") stay grounded in what the user actually saw.
 
@@ -223,11 +225,13 @@ Copy `.env.example` → `.env`. Key variables:
 |----------|----------|---------|---------|
 | `OPENROUTER_API_KEY` | Yes (for chat) | — | Intent classifier, troubleshoot synthesis, LangGraph agent |
 | `POSTGRES_PASSWORD` | No | `partselect` | Must match `docker-compose.yml` / `config.toml` |
-| `LIVE_SCRAPE_BACKEND` | No | `selenium` | `selenium` (free, Chrome/Chromium) or `firecrawl` (paid API) |
-| `FIRECRAWL_API_KEY` | Only for Firecrawl | — | Required when `LIVE_SCRAPE_BACKEND=firecrawl` |
+| `LIVE_SCRAPE_BACKEND` | No | from `config.toml` | Override `live_scrape.backend` for CI/testing: `selenium` or `firecrawl` |
+| `FIRECRAWL_API_KEY` | For Firecrawl backend | — | Required when `live_scrape.backend = "firecrawl"` |
 | `DB_HOST` | No | `postgres` in Docker | Set to `localhost` for host-side ingest, pytest, or scrape |
 | `FORCE_REINGEST` | No | unset | Set to `1` to reload JSONL into Postgres on startup / ingest |
 | `LOG_LEVEL` | No | `INFO` | Set to `DEBUG` for verbose request tracing |
+| `LOG_FORMAT` | No | `pretty` | `pretty` for colored human-readable Docker logs, `json` for structured log aggregation |
+| `LOG_COLOR` | No | enabled for `pretty` | Set to `false` / `0` / `off` to disable ANSI color output |
 
 Host-side commands (ingest, scrape, pytest) need `DB_HOST=localhost` and `POSTGRES_PASSWORD=partselect`.
 
@@ -300,7 +304,7 @@ PYTHONPATH=backend python -m scrapers.verify_output --audit
 | Stage | Module | Output |
 |-------|--------|--------|
 | `catalog` | `catalog_crawler.py` | Product URLs by category |
-| `seed-demo` | `seed_demo.py` | Curated demo URL list: PS11752778, all WDT780SAEM1 parts, top-12 per sub-category |
+| `seed-curated` | `curated_urls.py` | Smaller URL list: case-study PS, model page, top sub-category samples |
 | `seed-urls` | `run_collection.py` | Rebuild `product_links_deduped.jsonl` from existing `parts.jsonl` (skip catalog crawl) |
 | `details` | `detail_extractor.py` | Per-product JSONL (price, name, symptoms, YouTube watch URL from HTML) |
 | `enrich` | `compat_enricher.py` | Model cross-references (clicks "Load more", no 30-row cap) |
@@ -323,7 +327,7 @@ conda activate instalily
 cd partselect-agent
 
 # 1. Build curated URL list (~150–250 URLs); clears detail/enrich checkpoints
-PYTHONPATH=backend python -m scrapers.run_collection --stage seed-demo
+PYTHONPATH=backend python -m scrapers.run_collection --stage seed-curated
 
 # 2. Scrape product pages + model cross-refs + repair guides
 PYTHONPATH=backend python -m scrapers.run_collection --stage details
@@ -338,9 +342,9 @@ FORCE_REINGEST=1 DB_HOST=localhost POSTGRES_PASSWORD=partselect PYTHONPATH=backe
 docker compose restart backend
 ```
 
-Verify timing logs show `live=0ms` for model/compatibility/troubleshoot queries. Only unknown PS numbers trigger `live=` in logs.
+Verify logs show `source=db` for model/compatibility/troubleshoot queries that are fully served from the local catalog. Unknown PS numbers or sparse model catalogs can emit `source=live` when runtime fallback is enabled.
 
-**Observability:** Each `/api/chat` request logs one timing line (`req=… intent=… db=… live=… total=…`). Optional Langfuse tracing when `LANGFUSE_*` env vars are set.
+**Observability:** Backend logs are Loguru-backed and emit readable event names such as `chat.request.start`, `intent.classify.start`, `intent.classified`, `tool.call.start`, `tool.call.done`, `sse.stage`, `chat.response.done`, and `trace.summary`. Optional Langfuse tracing remains available when `LANGFUSE_*` env vars are set.
 
 Re-ingest after a fresh scrape (or merge partial scrape work):
 
@@ -399,19 +403,43 @@ REACT_APP_API_URL=http://localhost:8000 npm start
 docker compose logs -f backend
 ```
 
-Each log line includes `req=<id>` for end-to-end tracing:
+Backend logging is centralized in `backend/app/observability.py` and uses Loguru for configurable local and production-friendly output. Pretty mode is optimized for local Docker debugging; JSON mode is available for future log aggregation.
+
+Each event line includes `req_id=<id>` when a chat request trace is active:
 
 | Logger | What it reports |
 |--------|----------------|
-| `routers.chat` | Intent, model source, handler path |
-| `agent.router` | Classification result |
-| `agent.catalog` | Catalog scope, source (db/live), filter no-match |
-| `agent.troubleshoot` | RAG hit counts (causes, articles, parts) |
-| `agent.graph` | Empty-text warnings, LLM/tool exceptions |
-| `tools.list_compatible_parts` | DB hits, live-scrape fallback |
-| `scrapers.model_lookup` | Model page scrape outcomes, keyword filter hits |
+| `routers.chat` | Request start, model resolution, selected branch, SSE progress stages, final response metadata |
+| `agent.router` | Classifier model, classifier start/done, fallback classification |
+| `agent.catalog` | Catalog scope, part filter, source (`db` / `live` / `none`), result count |
+| `agent.troubleshoot` | RAG hit counts, troubleshoot prep, synthesis stream start/done |
+| `agent.graph` | Synthesis model, LangGraph invocation, tool transitions, token/character counts, fallbacks |
+| `tools.*` | Deterministic tool start/done events for search, compatibility, installation, cart, and compatible-parts lookup |
+| `live_scrape.gateway` | Runtime live scrape calls, backend (`selenium` / `firecrawl`), completion, missing-field counts |
 
-Set `LOG_LEVEL=DEBUG` in `.env` for verbose output.
+Default local output:
+
+```text
+00:43:22.811 | INFO     | routers.chat | chat.request.start req_id=cfb1848d has_session=True stream=True message=Hi active=Hi
+00:43:22.812 | INFO     | agent.router | intent.classify.start req_id=cfb1848d model=deepseek/deepseek-v4-flash message=Hi
+00:43:24.312 | INFO     | routers.chat | sse.stage req_id=cfb1848d stage=Putting the answer together...
+00:43:24.347 | INFO     | app.observability | trace.summary req_id=cfb1848d route=greeting intent_ms=1499.8
+```
+
+Logging controls:
+
+```bash
+# Human-readable colored logs for local Docker/dev
+LOG_LEVEL=INFO
+LOG_FORMAT=pretty
+LOG_COLOR=true
+
+# Structured logs for production/log aggregation
+LOG_FORMAT=json
+LOG_COLOR=false
+```
+
+Sensitive fields are redacted by key name (`api_key`, `token`, `secret`, `password`, `authorization`) and long user messages/prompts are truncated before logging.
 
 ---
 
@@ -457,10 +485,14 @@ Router live tests and some scenario cases require `OPENROUTER_API_KEY`.
 With `stream: true`, the response is SSE:
 
 ```
+data: {"stage": "Understanding your request..."}
+
 data: {"token": "partial text..."}
 
 data: {"done": true, "session_id": "...", "text": "...", "parts": [...]}
 ```
+
+`stage` events are backend-triggered progress labels for the UI. They are intentionally non-technical and disappear in the chat popup as soon as response text or the final `done` payload arrives.
 
 Set `stream: false` for a single JSON object (used by tests and legacy clients).
 
@@ -506,6 +538,8 @@ partselect-agent/
 │   │   │   ├── messages.py         # User-facing templates (referrals, troubleshoot footer)
 │   │   │   └── tools/              # search, compat, install, troubleshoot, cart
 │   │   ├── routers/chat.py         # Intent → handler dispatch + pending slots
+│   │   ├── observability.py        # Loguru config, safe event logs, request spans
+│   │   ├── live_scrape/            # Config-toggleable runtime scrape gateway
 │   │   ├── services/               # session, cart, chat history
 │   │   └── rag/                    # embedder + ingest
 │   ├── scrapers/                   # Selenium pipeline + runtime fetch
@@ -536,11 +570,15 @@ full_catalog_limit = 40
 full_catalog_primary_source = "live"   # db | live | none
 db_completeness_min_parts = 5          # min DB rows before trusting full-catalog DB
 
+[live_scrape]
+enabled = true          # set false after bulk ingest to disable runtime scraping
+backend = "firecrawl"   # firecrawl | selenium
+
 [retrieval]
 top_k = 7
 ```
 
-Runtime live scrape backend is controlled via env (not `config.toml`): `LIVE_SCRAPE_BACKEND=selenium` (default) or `firecrawl`.
+Runtime live scrape is controlled in `config.toml` (`[live_scrape]`). Env `LIVE_SCRAPE_BACKEND` overrides `backend` for local/CI testing.
 
 ---
 
