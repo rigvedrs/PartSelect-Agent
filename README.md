@@ -115,5 +115,5 @@ partselect-agent/
 ## More detail
 
 - [Detailed implementation README](docs/DETAILED_README.md)
-- [Quick test deck](docs/demo/PartSelect_AI_Chat_Agent_Demo.pptx)
+- [Quick info deck](docs/demo/PartSelect_AI_Chat_Agent_Demo.pptx)
 
