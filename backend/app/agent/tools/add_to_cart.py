@@ -3,6 +3,9 @@ from app.db.engine import get_engine
 from app.agent.tools.search_parts import get_part_by_ps
 from app.agent.tools.part_validation import is_valid_part
 from app.agent.tools.part_enrichment import enrich_part_details, needs_enrichment
+from app.observability import get_logger, log_event
+
+log = get_logger("tools.add_to_cart")
 
 
 def _upsert_part(conn, part: dict) -> None:
@@ -76,8 +79,10 @@ def add_to_cart(
 ) -> dict:
     """Add a part to the session cart. Returns updated cart summary."""
     ps = ps_number.upper()
+    log_event(log, "tool.call.start", tool="add_to_cart", ps_number=ps, quantity=quantity, has_hint=bool(part_hint))
     part = _resolve_part_row(ps, part_hint)
     if not part:
+        log_event(log, "tool.call.done", tool="add_to_cart", ps_number=ps, success=False)
         return {"success": False, "error": f"Part {ps} not found."}
 
     engine = get_engine()
@@ -112,6 +117,8 @@ def add_to_cart(
                 item.update({k: fresh.get(k) for k in ("name", "price", "image_url", "product_url")})
 
     total = sum((i["price"] or 0) * i["quantity"] for i in item_list)
+    cart_count = sum(i["quantity"] for i in item_list)
+    log_event(log, "tool.call.done", tool="add_to_cart", ps_number=ps, success=True, cart_count=cart_count, cart_total=round(float(total), 2))
     return {
         "success": True,
         "added": {
@@ -120,5 +127,5 @@ def add_to_cart(
             "price": float(part["price"] or 0),
         },
         "cart_total": round(float(total), 2),
-        "cart_count": sum(i["quantity"] for i in item_list),
+        "cart_count": cart_count,
     }

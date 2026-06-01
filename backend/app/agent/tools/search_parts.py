@@ -1,8 +1,10 @@
-import os
 import re
 from sqlalchemy import text
 from app.db.engine import get_engine
 from app.agent.tools.part_validation import is_valid_part
+from app.observability import get_logger, log_event, safe_preview
+
+log = get_logger("tools.search_parts")
 
 _PS_RE = re.compile(r"PS\d+", re.IGNORECASE)
 
@@ -23,39 +25,26 @@ def _extract_keywords(query: str) -> str:
     return " ".join(keywords) if keywords else query.lower()
 
 
-def _firecrawl_fallback(ps_number: str) -> list[dict]:
-    """Live-scrape an unknown PS number and ingest on-the-fly."""
-    from scrapers.runtime_fetch import live_scrape_available
+def _live_scrape_fallback(ps_number: str) -> list[dict]:
+    """Live-scrape an unknown PS number (ephemeral — no DB write)."""
+    from app.live_scrape.gateway import get_gateway
     from app.observability import span
-    if not live_scrape_available():
+
+    if not get_gateway().is_enabled():
         return []
+
+    log_event(log, "tool.call.start", tool="live_scrape_part", ps_number=ps_number)
     with span("live"):
-        try:
-            from scrapers.parts_scraper import scrape_and_parse
-            from app.ingest_models import reshape_part
-            from app.rag.ingest import _insert_part
-
-            raw = scrape_and_parse(ps_number)
-            if not raw:
-                return []
-
-            p = reshape_part(raw)
-            if not is_valid_part({"ps_number": p["ps_number"], "name": p["name"]}):
-                return []
-            p.setdefault("video_url", None)
-
-            engine = get_engine()
-            with engine.begin() as conn:
-                _insert_part(conn, p)
-
-            with engine.connect() as conn:
-                row = conn.execute(
-                    text("SELECT * FROM parts WHERE ps_number = :ps"),
-                    {"ps": ps_number.upper()}
-                ).mappings().first()
-            return [dict(row)] if row else []
-        except Exception:
+        result = get_gateway().fetch_part(ps_number)
+        if not result.data:
+            log_event(log, "tool.call.done", tool="live_scrape_part", ps_number=ps_number, source="none", count=0)
             return []
+        part = dict(result.data)
+        if result.missing_fields:
+            part["missing_fields"] = list(result.missing_fields)
+        part["complete"] = result.complete
+        log_event(log, "tool.call.done", tool="live_scrape_part", ps_number=ps_number, source="live", count=1)
+        return [part]
 
 
 def get_part_by_ps(ps_number: str, fallback: dict | None = None) -> dict | None:
@@ -69,7 +58,7 @@ def get_part_by_ps(ps_number: str, fallback: dict | None = None) -> dict | None:
         ).mappings().first()
     if row and is_valid_part(dict(row)):
         return dict(row)
-    fresh = _firecrawl_fallback(ps)
+    fresh = _live_scrape_fallback(ps)
     if fresh and is_valid_part(fresh[0]):
         return fresh[0]
     if fallback and fallback.get("name"):
@@ -91,7 +80,8 @@ def get_part_by_ps(ps_number: str, fallback: dict | None = None) -> dict | None:
 
 def search_parts(query: str, category: str | None = None) -> list[dict]:
     """Return up to 5 parts matching the query. Exact PS# match first,
-    then text search, then Firecrawl live fallback for unknown PS numbers."""
+    then text search, then live fallback for unknown PS numbers."""
+    log_event(log, "tool.call.start", tool="search_parts", query=safe_preview(query), category=category)
     engine = get_engine()
     with engine.connect() as conn:
         ps_match = _PS_RE.search(query)
@@ -102,8 +92,11 @@ def search_parts(query: str, category: str | None = None) -> list[dict]:
                 {"ps": ps}
             ).mappings().first()
             if row and is_valid_part(dict(row)):
+                log_event(log, "tool.call.done", tool="search_parts", source="db", ps_number=ps, count=1)
                 return [dict(row)]
-            return _firecrawl_fallback(ps)
+            results = _live_scrape_fallback(ps)
+            log_event(log, "tool.call.done", tool="search_parts", source="live" if results else "none", ps_number=ps, count=len(results))
+            return results
 
         keywords = _extract_keywords(query).split()
         if not keywords:
@@ -142,4 +135,6 @@ def search_parts(query: str, category: str | None = None) -> list[dict]:
                 LIMIT 5
             """), params2).mappings().all()
 
-        return [dict(r) for r in rows]
+        results = [dict(r) for r in rows]
+        log_event(log, "tool.call.done", tool="search_parts", source="db", count=len(results), query=safe_preview(query))
+        return results
