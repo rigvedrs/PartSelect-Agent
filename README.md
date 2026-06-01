@@ -43,6 +43,33 @@ User ──► React Chat Widget (port 3000)
 
 ---
 
+## Embeddable chat widget
+
+The frontend is a floating chat widget that can run as the standalone local demo or be embedded into another web page.
+
+For the local demo, open the normal React app at `http://localhost:3000`.
+
+For an embedded page, include the built frontend CSS and JS assets from `frontend/build/asset-manifest.json` and add this mount point:
+
+```html
+<div id="partselect-chat-widget"></div>
+<link rel="stylesheet" href="/static/css/main.<hash>.css">
+<script defer src="/static/js/main.<hash>.js"></script>
+```
+
+When `#partselect-chat-widget` exists, the bundle mounts only the chat widget. When it is absent, the bundle uses the normal `#root` demo app mount.
+
+The widget:
+
+- Opens as a floating chat bubble.
+- Includes an expand/collapse control for a larger desktop panel.
+- Opens links from chat responses in a new tab.
+- Allows up to 5 user messages per session, then asks the user to start a new chat.
+
+Set `REACT_APP_API_URL` at build time if the backend is not available at `http://localhost:8000`.
+
+---
+
 ## Request flow
 
 Every chat message goes through the same pipeline:
