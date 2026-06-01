@@ -3,8 +3,11 @@ __pycache__/
 .venv/
 venv/
 .env
-backend/data/raw/*.jsonl
 backend/data/raw/_backup/
+backend/data/raw/*.jsonl
+!backend/data/raw/parts.jsonl
+!backend/data/raw/repairs.jsonl
+!backend/data/raw/articles.jsonl
 backend/data/scrape_work/
 backend/postgres_db/
 node_modules/

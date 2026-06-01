@@ -1,19 +1,22 @@
-# Raw catalog data (local only)
+# Raw catalog data
 
-JSONL files in this directory are **gitignored** — they are produced by the scrape pipeline or copied from your own exports.
+Bundled JSONL for local demo and Docker Compose quickstart (curated scrape, not the old `_backup/` full crawl):
 
-Required for first-time ingest:
+| File | Purpose |
+|------|---------|
+| `parts.jsonl` | Parts catalog with embeddings source fields |
+| `repairs.jsonl` | Repair guides |
+| `articles.jsonl` | Blog / article content |
 
-- `parts.jsonl`
-- `repairs.jsonl`
-- `articles.jsonl`
+On first `docker compose up`, the backend entrypoint ingests these into Postgres/pgvector (~60s). Set `FORCE_REINGEST=1` to reload after you replace the files.
 
-Quickstart without a full 6k scrape:
+To refresh from a new scrape:
 
 ```bash
 PYTHONPATH=backend python -m scrapers.run_collection --stage seed-curated
 PYTHONPATH=backend python -m scrapers.run_collection --stage details --limit 100
 PYTHONPATH=backend python -m scrapers.run_collection --stage refresh-db
+docker compose restart backend
 ```
 
-Or copy pre-built JSONL files here before running `docker compose up` or `python -m app.rag.ingest`.
+Intermediate scrape checkpoints live under `backend/data/scrape_work/` (gitignored). Exports overwrite the JSONL files here; use `--backup` on export to copy previous files into `_backup/` (also gitignored).

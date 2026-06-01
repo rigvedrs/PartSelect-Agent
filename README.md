@@ -211,7 +211,7 @@ docker compose up -d
 open http://localhost:3000
 ```
 
-The first startup downloads the embedding model (~90 MB) and ingests JSONL data — takes about 60 seconds. Subsequent starts are instant unless `FORCE_REINGEST=1` is set.
+A **curated catalog** ships in `backend/data/raw/` (`parts.jsonl`, `repairs.jsonl`, `articles.jsonl`) so reviewers can run the app without scraping. The first startup downloads the embedding model (~90 MB) and ingests that JSONL into Postgres — takes about 60 seconds. Subsequent starts are instant unless `FORCE_REINGEST=1` is set.
 
 After code or data changes, restart the backend: `docker compose restart backend`.
 
