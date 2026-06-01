@@ -172,5 +172,7 @@ def test_chat_sse_deterministic_done_event(client):
         chunks = list(r.iter_bytes())
     assert chunks
     payload = b"".join(chunks).decode()
+    assert '"stage": "Understanding your request..."' in payload
     assert '"done": true' in payload
     assert '"text"' in payload
+    assert payload.index('"stage": "Understanding your request..."') < payload.index('"done": true')
