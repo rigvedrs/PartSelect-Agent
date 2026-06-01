@@ -5,6 +5,7 @@ from typing import AsyncIterator
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
+from app.config import load_settings
 from app.agent.llm_provider import get_llm
 from app.agent.messages import TROUBLESHOOT_REDIRECT
 from app.agent.tools.troubleshoot import (
@@ -12,7 +13,7 @@ from app.agent.tools.troubleshoot import (
     retrieve_troubleshoot_context,
     format_context_for_llm,
 )
-from app.observability import get_logger, span
+from app.observability import get_logger, log_event, safe_preview, span
 
 log = get_logger("agent.troubleshoot")
 
@@ -41,12 +42,22 @@ def _chunk_text(content: object) -> str:
 
 
 def _prepare_context(message: str) -> tuple[str, dict]:
+    log_event(log, "tool.call.start", tool="troubleshoot.prepare", message=safe_preview(message))
     appliance = detect_appliance_type(message)
     ctx = retrieve_troubleshoot_context(message, appliance)
     context_text = format_context_for_llm(ctx)
     log.info(
         "troubleshoot rag appliance=%s causes=%d articles=%d parts=%d",
         appliance, len(ctx["causes"]), len(ctx["articles"]), len(ctx["parts"]),
+    )
+    log_event(
+        log,
+        "tool.call.done",
+        tool="troubleshoot.prepare",
+        appliance=appliance,
+        causes_count=len(ctx["causes"]),
+        articles_count=len(ctx["articles"]),
+        parts_count=len(ctx["parts"]),
     )
     return appliance, ctx
 
@@ -80,10 +91,12 @@ async def stream_troubleshoot_answer(
     appliance = prep["appliance"]
     context_text = prep["context_text"]
     llm = get_llm("synthesis")
+    model = load_settings().llm.synthesis_model
     body_parts: list[str] = []
 
     try:
         with span("llm_synthesis"):
+            log_event(log, "llm.stream.start", model=model, purpose="troubleshoot")
             async for chunk in llm.astream([
                 SystemMessage(content=_SYSTEM),
                 HumanMessage(content=f"Retrieved context:\n{context_text}\n\nCustomer message: {message}"),
@@ -94,6 +107,7 @@ async def stream_troubleshoot_answer(
                     yield token
     except Exception:
         log.exception("troubleshoot LLM stream failed")
+        log_event(log, "llm.stream.error", model=model, purpose="troubleshoot")
 
     body = "".join(body_parts).strip()
     if not body:
@@ -101,6 +115,14 @@ async def stream_troubleshoot_answer(
         yield body
 
     footer = f"\n\n{TROUBLESHOOT_REDIRECT}"
+    log_event(
+        log,
+        "llm.stream.done",
+        model=model,
+        purpose="troubleshoot",
+        token_count=len(body_parts),
+        char_count=len(body),
+    )
     yield footer
 
 
@@ -108,8 +130,10 @@ async def generate_troubleshoot_answer(message: str) -> dict:
     """Non-streaming troubleshoot (tests and stream=false fallback)."""
     prep = prepare_troubleshoot(message)
     llm = get_llm("synthesis")
+    model = load_settings().llm.synthesis_model
     try:
         with span("llm_synthesis"):
+            log_event(log, "llm.stream.start", model=model, purpose="troubleshoot_non_stream")
             response = await llm.ainvoke([
                 SystemMessage(content=_SYSTEM),
                 HumanMessage(content=f"Retrieved context:\n{prep['context_text']}\n\nCustomer message: {message}"),
@@ -117,12 +141,20 @@ async def generate_troubleshoot_answer(message: str) -> dict:
         body = _chunk_text(response.content).strip()
     except Exception:
         log.exception("troubleshoot LLM failed")
+        log_event(log, "llm.stream.error", model=model, purpose="troubleshoot_non_stream")
         body = ""
 
     if not body:
         body = _fallback_body(prep["appliance"])
 
     text = f"{body}\n\n{TROUBLESHOOT_REDIRECT}"
+    log_event(
+        log,
+        "llm.stream.done",
+        model=model,
+        purpose="troubleshoot_non_stream",
+        char_count=len(body),
+    )
     return {"text": text, "parts": prep["parts"]}
 
 

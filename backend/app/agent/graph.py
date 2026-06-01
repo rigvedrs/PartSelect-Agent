@@ -17,7 +17,8 @@ from app.agent.tools.list_compatible_parts import list_compatible_parts
 from app.agent.tools.get_installation import get_installation_guide
 from app.agent.tools.add_to_cart import add_to_cart as _add_to_cart
 from app.agent.tools.remove_from_cart import remove_from_cart as _remove_from_cart
-from app.observability import get_logger
+from app.config import load_settings
+from app.observability import get_logger, log_event, safe_preview
 
 log = get_logger("agent.graph")
 
@@ -39,6 +40,7 @@ IMPORTANT:
 - Respond to the user's LATEST message only. Prior messages are background context.
 - Do NOT assume or invent an appliance model. Only use a model number the user provided this turn or in an explicit [My appliance model: ...] prefix.
 - Never claim compatibility unless check_compatibility_tool or list_compatible_parts_tool confirms it.
+- When a tool result has source: "live", tell the user the data was fetched live from PartSelect. If complete is false or missing_fields is set, say which details are unavailable — do not guess.
 
 Be specific: include part numbers, prices, and links when recommending parts."""
 
@@ -122,6 +124,16 @@ async def run_agent_streaming(
     history: list,
 ) -> AsyncIterator[str]:
     """Yield LLM text tokens from the LangGraph agent."""
+    settings = load_settings()
+    log_event(
+        log,
+        "agent.invoke.start",
+        session_id=session_id,
+        model=settings.llm.synthesis_model,
+        has_appliance_model=bool(appliance_model),
+        message=safe_preview(message),
+        history_count=len(history),
+    )
     graph = build_graph(session_id)
     content = message
     if appliance_model and appliance_model.strip():
@@ -142,11 +154,21 @@ async def run_agent_streaming(
         return str(raw)
 
     emitted = False
+    token_count = 0
+    char_count = 0
+    logged_tools: set[tuple[str, str]] = set()
     try:
         async for event in graph.astream_events(
             {"messages": input_messages},
             version="v2",
         ):
+            event_name = event.get("event") or ""
+            if "tool" in event_name:
+                tool_name = event.get("name") or event.get("metadata", {}).get("langgraph_node") or ""
+                marker = (event_name, str(tool_name))
+                if marker not in logged_tools:
+                    logged_tools.add(marker)
+                    log_event(log, "agent.tool.transition", session_id=session_id, event=event_name, tool=tool_name)
             if event.get("event") != "on_chat_model_stream":
                 continue
             chunk = event.get("data", {}).get("chunk")
@@ -155,19 +177,24 @@ async def run_agent_streaming(
             token = _content_from_chunk(getattr(chunk, "content", None))
             if token:
                 emitted = True
+                token_count += 1
+                char_count += len(token)
                 yield token
     except Exception:
         log.exception("agent.astream_events failed session=%s", session_id)
+        log_event(log, "agent.stream.error", session_id=session_id, path="astream_events")
         yield "Sorry, something went wrong while processing that. Please try rephrasing your question."
         return
 
     if emitted:
+        log_event(log, "agent.stream.done", session_id=session_id, token_count=token_count, char_count=char_count)
         return
 
     try:
         result = await graph.ainvoke({"messages": input_messages})
     except Exception:
         log.exception("agent.invoke failed session=%s", session_id)
+        log_event(log, "agent.invoke.error", session_id=session_id, path="ainvoke")
         yield "Sorry, something went wrong while processing that. Please try rephrasing your question."
         return
 
@@ -176,4 +203,5 @@ async def run_agent_streaming(
     if not text.strip():
         log.warning("agent returned empty text session=%s", session_id)
         text = "I couldn't complete that request. Please try again or rephrase your question."
+    log_event(log, "agent.stream.done", session_id=session_id, token_count=1, char_count=len(text))
     yield text

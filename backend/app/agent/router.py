@@ -8,7 +8,8 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field, field_validator
 
 from app.agent.llm_provider import get_classifier_llm
-from app.observability import get_logger
+from app.config import load_settings
+from app.observability import get_logger, log_event, safe_preview
 
 log = get_logger("agent.router")
 
@@ -196,6 +197,8 @@ async def classify_intent(
     text = latest_utterance(message)
     if not text:
         return IntentResult(intent=Intent.GENERAL)
+    settings = load_settings()
+    log_event(log, "intent.classify.start", model=settings.llm.tool_model, message=safe_preview(text))
 
     context: list[str] = []
     if session_model:
@@ -222,7 +225,25 @@ async def classify_intent(
             "classified intent=%s browse_all=%s part_query=%r ps=%r",
             result.intent.value, result.browse_all_parts, result.part_query, result.ps_number,
         )
+        log_event(
+            log,
+            "intent.classify.done",
+            model=settings.llm.tool_model,
+            intent=result.intent.value,
+            browse_all=result.browse_all_parts,
+            part_query=result.part_query,
+            ps_number=result.ps_number,
+            fallback=False,
+        )
         return result
     except Exception:
         log.exception("LLM intent classification failed, using fallback")
-        return _fallback_classification(text)
+        fallback = _fallback_classification(text)
+        log_event(
+            log,
+            "intent.classify.done",
+            model=settings.llm.tool_model,
+            intent=fallback.intent.value,
+            fallback=True,
+        )
+        return fallback
