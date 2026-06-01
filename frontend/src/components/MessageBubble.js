@@ -5,16 +5,17 @@ import ProductCard from "./ProductCard";
 import InstallationGuide from "./InstallationGuide";
 import CompatibilityBadge from "./CompatibilityBadge";
 import MessageContent from "./MessageContent";
+import TypingIndicator from "./TypingIndicator";
 
 export default function MessageBubble({ message, onAddToCart }) {
-  const { role, content, parts, installation_steps, compatibility, out_of_scope, streaming } = message;
+  const { role, content, parts, installation_steps, compatibility, out_of_scope, streaming, stage } = message;
 
   return (
     <div className={`bubble-row ${role}`}>
       <div className={`bubble ${role}`}>
         {content && <MessageContent content={content} />}
         {streaming && !content && (
-          <span className="stream-cursor" aria-hidden="true">▍</span>
+          <TypingIndicator label={stage || "Working on it..."} />
         )}
 
         {compatibility && <CompatibilityBadge result={compatibility} />}
