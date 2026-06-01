@@ -10,9 +10,13 @@ import { useSession } from "../hooks/useSession";
 import { useChat } from "../hooks/useChat";
 import { useCart } from "../hooks/useCart";
 
+const MAX_USER_MESSAGES = 5;
+
 export default function ChatWidget() {
   const [open, setOpen] = useState(false);
+  const [expanded, setExpanded] = useState(false);
   const [cartOpen, setCartOpen] = useState(false);
+  const [userMessageCount, setUserMessageCount] = useState(0);
   const {
     sessionId,
     applianceModel,
@@ -37,6 +41,7 @@ export default function ChatWidget() {
   });
 
   const [showSuggestions, setShowSuggestions] = useState(true);
+  const limitReached = userMessageCount >= MAX_USER_MESSAGES;
 
   useEffect(() => {
     ensureSession();
@@ -46,13 +51,16 @@ export default function ChatWidget() {
     await startNewChat();
     setChatResetKey((k) => k + 1);
     setShowSuggestions(true);
+    setUserMessageCount(0);
     refreshCart();
   }, [startNewChat, refreshCart]);
 
   const handleSend = useCallback((text) => {
+    if (limitReached) return;
     setShowSuggestions(false);
+    setUserMessageCount((count) => count + 1);
     send(text);
-  }, [send]);
+  }, [limitReached, send]);
 
   const handleAddToCart = useCallback(async (psNumber) => {
     if (!sessionId) return;
@@ -67,11 +75,17 @@ export default function ChatWidget() {
       </button>
 
       {open && (
-        <div className="chat-panel">
+        <div
+          className={`chat-panel${expanded ? " expanded" : ""}`}
+          role="dialog"
+          aria-label="PartSelect chat"
+        >
           <ChatHeader
             onCartClick={() => { setCartOpen(true); refreshCart(); }}
             onNewChat={handleNewChat}
             cartCount={cart.count}
+            expanded={expanded}
+            onToggleExpanded={() => setExpanded((value) => !value)}
           />
 
           <MessageList
@@ -80,13 +94,19 @@ export default function ChatWidget() {
             onAddToCart={handleAddToCart}
           />
 
-          {showSuggestions && messages.length <= 1 && (
+          {showSuggestions && messages.length <= 1 && !limitReached && (
             <SuggestedQueries onSelect={handleSend} />
+          )}
+
+          {limitReached && (
+            <div className="chat-limit-notice">
+              Message limit reached. Start a new chat to continue.
+            </div>
           )}
 
           <ModelInput value={applianceModel} onChange={setApplianceModel} />
 
-          <ChatInput onSend={handleSend} disabled={isLoading} />
+          <ChatInput onSend={handleSend} disabled={isLoading} limitReached={limitReached} />
         </div>
       )}
 

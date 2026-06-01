@@ -20,6 +20,22 @@
   overflow: hidden;
 }
 
+.chat-panel.expanded {
+  width: min(760px, calc(100vw - 56px));
+  height: min(760px, calc(100vh - 128px));
+}
+
+.chat-limit-notice {
+  margin: 8px 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--partselect-border);
+  border-radius: 8px;
+  background: #fff;
+  color: #4b5563;
+  font-size: 0.85rem;
+  text-align: center;
+}
+
 @media (max-width: 480px) {
   .chat-panel { width: 100vw; height: 100vh; bottom: 0; right: 0; border-radius: 0; }
   .chat-fab { display: none; }
