@@ -16,6 +16,7 @@ function assistantFromPayload(data) {
     out_of_scope: data.out_of_scope,
     source: data.source,
     streaming: false,
+    stage: "",
   };
 }
 
@@ -69,7 +70,7 @@ export function useChat({ sessionId, applianceModel, onCartUpdate, resetKey = 0,
     setMessages((prev) => [
       ...prev,
       { role: "user", content: text },
-      { role: "assistant", content: "", streaming: true },
+      { role: "assistant", content: "", streaming: true, stage: "Working on it..." },
     ]);
     setIsLoading(true);
 
@@ -79,6 +80,19 @@ export function useChat({ sessionId, applianceModel, onCartUpdate, resetKey = 0,
         message: text,
         applianceModel,
         signal: controller.signal,
+        onStage: (stage) => {
+          setMessages((prev) => {
+            if (prev.length === 0) return prev;
+            const next = [...prev];
+            const idx = next.length - 1;
+            next[idx] = {
+              ...next[idx],
+              stage,
+              streaming: true,
+            };
+            return next;
+          });
+        },
         onToken: (token) => {
           setIsLoading(false);
           setMessages((prev) => {
@@ -88,6 +102,7 @@ export function useChat({ sessionId, applianceModel, onCartUpdate, resetKey = 0,
             next[idx] = {
               ...next[idx],
               content: (next[idx].content || "") + token,
+              stage: "",
               streaming: true,
             };
             return next;
