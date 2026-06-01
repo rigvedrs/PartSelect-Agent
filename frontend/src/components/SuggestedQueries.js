@@ -1,6 +1,6 @@
 import React from "react";
 
-/** Demo prompts aligned with seeded catalog data (see README demo pipeline). */
+/** Example prompts aligned with case-study queries (see README). */
 const SUGGESTIONS = [
   "How do I install PS11752778?",
   "Is PS11752778 compatible with 10640262010?",

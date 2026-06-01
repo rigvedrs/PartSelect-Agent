@@ -1,4 +1,4 @@
-"""Build curated product_links_deduped.jsonl for demo catalog."""
+"""Build a smaller product_links_deduped.jsonl for smoke tests and incremental scrape."""
 from __future__ import annotations
 
 import argparse
@@ -19,16 +19,14 @@ DISHWASHER_SUBCAT_KEYWORDS = [
     "pump", "spray arm", "door latch", "filter",
 ]
 
-DEMO_DIR = io_utils.WORK_DIR / "demo"
-MODEL_PARTS_FILE = DEMO_DIR / "wdt780saem1_parts.json"
-
 
 def _ps_product_url(ps: str) -> str:
     return f"https://www.partselect.com/{ps.upper()}-Part.htm"
 
 
 def _collect_model_parts(driver, model: str) -> list[dict]:
-    from scrapers.model_lookup import _expand_model_page, _parse_model_page_dom
+    from scrapers.model_lookup import _expand_model_page
+
     browser.navigate(driver, model_page_url(model))
     _expand_model_page(driver)
     entries = _parse_model_page_dom(driver)
@@ -74,13 +72,13 @@ def _build_subcategory_tree(driver) -> list[dict]:
     return tree
 
 
-def build_seed(*, headless: bool = True) -> dict:
+def build_curated_urls(*, headless: bool = True) -> dict:
+    """Write product_links_deduped.jsonl from case-study PS, model page, and sub-categories."""
     io_utils.ensure_dirs()
-    DEMO_DIR.mkdir(parents=True, exist_ok=True)
     out = io_utils.CATALOG_DIR / "product_links_deduped.jsonl"
     seen: set[str] = set()
     rows: list[dict] = []
-    model_ps_numbers: list[str] = []
+    model_part_count = 0
 
     def add(row: dict) -> None:
         url = (row.get("product_url") or "").strip().split("?")[0]
@@ -93,7 +91,7 @@ def build_seed(*, headless: bool = True) -> dict:
     try:
         add({"product_url": _ps_product_url(CASE_STUDY_PS), "source": "case_study"})
         for row in _collect_model_parts(driver, CASE_STUDY_MODEL):
-            model_ps_numbers.append(row["ps_number"])
+            model_part_count += 1
             add(row)
 
         tree = io_utils.read_json(io_utils.SUBCATS_FILE, [])
@@ -114,11 +112,6 @@ def build_seed(*, headless: bool = True) -> dict:
         for row in rows:
             f.write(json.dumps(row, ensure_ascii=False) + "\n")
 
-    MODEL_PARTS_FILE.write_text(json.dumps({
-        "model_number": CASE_STUDY_MODEL,
-        "ps_numbers": sorted(set(model_ps_numbers)),
-    }, indent=2), encoding="utf-8")
-
     for path in (
         io_utils.DETAILS_JSONL,
         io_utils.ENRICHED_JSONL,
@@ -130,17 +123,16 @@ def build_seed(*, headless: bool = True) -> dict:
 
     return {
         "urls": len(rows),
-        "model_parts": len(model_ps_numbers),
+        "model_parts": model_part_count,
         "output": str(out),
-        "model_parts_file": str(MODEL_PARTS_FILE),
     }
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Build demo seed URL list")
+    parser = argparse.ArgumentParser(description="Build curated product URL list for smoke scrape")
     parser.add_argument("--no-headless", dest="headless", action="store_false", default=True)
     args = parser.parse_args(argv)
-    print(json.dumps(build_seed(headless=args.headless), indent=2))
+    print(json.dumps(build_curated_urls(headless=args.headless), indent=2))
     return 0
 
 

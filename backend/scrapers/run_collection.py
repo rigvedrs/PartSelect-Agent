@@ -53,7 +53,7 @@ def main(argv: list[str] | None = None) -> int:
         "--stage",
         choices=(
             "catalog",
-            "seed-demo",
+            "seed-curated",
             "details",
             "enrich",
             "repairs",
@@ -92,10 +92,10 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     try:
-        if args.stage == "seed-demo":
-            from scrapers.seed_demo import build_seed
-            print("== seed-demo ==")
-            print(json.dumps(build_seed(headless=args.headless), indent=2))
+        if args.stage == "seed-curated":
+            from scrapers.curated_urls import build_curated_urls
+            print("== seed-curated ==")
+            print(json.dumps(build_curated_urls(headless=args.headless), indent=2))
             return 0
 
         if args.stage == "seed-urls":
