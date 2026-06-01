@@ -40,7 +40,7 @@ export async function getChatHistory(sessionId) {
   return res.json();
 }
 
-function parseSseBlock(block) {
+export function parseSseBlock(block) {
   const line = block.trim();
   if (!line.startsWith("data:")) return null;
   try {
@@ -58,6 +58,7 @@ export async function sendMessageStream({
   message,
   applianceModel,
   onToken,
+  onStage,
   onDone,
   signal,
 }) {
@@ -98,6 +99,7 @@ export async function sendMessageStream({
     for (const part of parts) {
       const data = parseSseBlock(part);
       if (!data) continue;
+      if (data.stage) onStage?.(data.stage);
       if (data.token) onToken?.(data.token);
       if (data.done) {
         finalPayload = data;
@@ -108,6 +110,7 @@ export async function sendMessageStream({
 
   if (buffer.trim()) {
     const data = parseSseBlock(buffer);
+    if (data?.stage) onStage?.(data.stage);
     if (data?.token) onToken?.(data.token);
     if (data?.done) {
       finalPayload = data;
