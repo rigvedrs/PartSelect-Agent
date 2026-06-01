@@ -2,8 +2,6 @@
 
 AI assistant for PartSelect-style appliance part shopping. It helps customers find refrigerator and dishwasher parts, verify compatibility, read installation guidance, troubleshoot symptoms, and manage a session cart from a compact embeddable chat widget.
 
-![PartSelect app home](docs/assets/partselect-home.png)
-
 ## What it can do
 
 | Capability | What the user asks | What the system returns |
