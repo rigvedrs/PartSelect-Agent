@@ -160,7 +160,9 @@ def test_session_messages_restore(client):
     assert body["messages"][-1]["role"] == "assistant"
 
 
-def test_chat_sse_deterministic_done_event(client):
+def test_chat_sse_deterministic_done_event(client, caplog):
+    import logging
+    caplog.set_level(logging.INFO)
     sid = client.post("/api/session").json()["session_id"]
     with client.stream("POST", "/api/chat", json={
         "session_id": sid,
@@ -176,3 +178,8 @@ def test_chat_sse_deterministic_done_event(client):
     assert '"done": true' in payload
     assert '"text"' in payload
     assert payload.index('"stage": "Understanding your request..."') < payload.index('"done": true')
+    messages = "\n".join(r.message for r in caplog.records)
+    assert "chat.request.start" in messages
+    assert "intent.classified" in messages
+    assert "sse.stage" in messages
+    assert "chat.response.done" in messages

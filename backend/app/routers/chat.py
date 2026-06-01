@@ -27,7 +27,14 @@ from app.services.session_service import (
     remember_parts, get_last_parts, get_recent_parts, get_part_hint,
 )
 from app.routers.sse import sse_done, sse_stage, sse_token
-from app.observability import get_logger, new_request_id, span, trace_request
+from app.observability import (
+    get_logger,
+    log_event,
+    new_request_id,
+    safe_preview,
+    span,
+    trace_request,
+)
 
 log = get_logger("routers.chat")
 
@@ -85,10 +92,23 @@ def _track_parts(session_id: str, parts: list | None) -> None:
         remember_parts(session_id, parts)
 
 
+def _payload_metadata(payload: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "has_text": bool(payload.get("text")),
+        "parts_count": len(payload.get("parts") or []),
+        "installation_steps_count": len(payload.get("installation_steps") or []),
+        "has_compatibility": bool(payload.get("compatibility")),
+        "has_cart_update": bool(payload.get("cart_update")),
+        "out_of_scope": bool(payload.get("out_of_scope")),
+        "source": payload.get("source"),
+    }
+
+
 def _finalize(session_id: str, user_message: str, payload: dict[str, Any]) -> dict[str, Any]:
     full = {"session_id": session_id, **payload}
     _track_parts(session_id, full.get("parts"))
     record_assistant_response(session_id, user_message, full)
+    log_event(log, "chat.response.done", **_payload_metadata(full))
     return full
 
 
@@ -108,9 +128,11 @@ async def _respond_json_or_sse(
 
         async def _gen() -> AsyncIterator[bytes]:
             if stage:
+                log_event(log, "sse.stage", stage=stage)
                 yield sse_stage(stage)
             _track_parts(session_id, full.get("parts"))
             record_assistant_response(session_id, user_message, full)
+            log_event(log, "chat.response.done", **_payload_metadata(full))
             yield sse_done(full)
 
         return _sse_response(_gen())
@@ -127,8 +149,10 @@ async def _stream_llm_tokens(
 ) -> StreamingResponse:
     async def _gen() -> AsyncIterator[bytes]:
         if stage:
+            log_event(log, "sse.stage", stage=stage)
             yield sse_stage(stage)
         text_parts: list[str] = []
+        log_event(log, "llm.stream.start", has_extra=bool(extra))
         async for token in token_source:
             text_parts.append(token)
             yield sse_token(token)
@@ -138,6 +162,13 @@ async def _stream_llm_tokens(
         payload: dict[str, Any] = {"session_id": session_id, "text": full_text, **(extra or {})}
         _track_parts(session_id, payload.get("parts"))
         record_assistant_response(session_id, user_message, payload)
+        log_event(
+            log,
+            "llm.stream.done",
+            token_count=len(text_parts),
+            char_count=len(full_text),
+        )
+        log_event(log, "chat.response.done", **_payload_metadata(payload))
         yield sse_done(payload)
 
     return _sse_response(_gen())
@@ -180,12 +211,14 @@ async def chat(req: ChatRequest):
     if req.stream:
         async def _gen() -> AsyncIterator[bytes]:
             with trace_request(rid, route="chat") as trace:
+                log_event(log, "sse.stage", stage="Understanding your request...")
                 yield sse_stage("Understanding your request...")
                 result = await _chat_inner(req, rid, trace)
                 if isinstance(result, StreamingResponse):
                     async for chunk in result.body_iterator:
                         yield chunk
                     return
+                log_event(log, "chat.response.done", **_payload_metadata(result))
                 yield sse_done(result)
 
         return _sse_response(_gen())
@@ -205,6 +238,15 @@ async def _chat_inner(req: ChatRequest, rid: str, trace) -> dict[str, Any] | Str
     message = req.message.strip()
     active = latest_utterance(message)
     appliance_model = _resolve_model(message, req.appliance_model, session)
+    log_event(
+        log,
+        "chat.request.start",
+        has_session=bool(req.session_id),
+        stream=req.stream,
+        message=safe_preview(message),
+        active=safe_preview(active),
+        provided_model=safe_preview(req.appliance_model),
+    )
 
     _model_in_msg = extract_model_number(message)
     if _model_in_msg and (not session or session.get("appliance_model") != _model_in_msg):
@@ -212,6 +254,12 @@ async def _chat_inner(req: ChatRequest, rid: str, trace) -> dict[str, Any] | Str
         session = get_session(session_id)
         appliance_model = appliance_model or _model_in_msg
 
+    log_event(
+        log,
+        "chat.model.resolved",
+        model=appliance_model or "",
+        session_model=bool(session and session.get("appliance_model")),
+    )
     log.info("req=%s msg=%r model=%r", rid, message[:60], appliance_model or "")
 
     if not is_in_scope(active):
@@ -220,11 +268,13 @@ async def _chat_inner(req: ChatRequest, rid: str, trace) -> dict[str, Any] | Str
             "Please ask me about appliance parts, compatibility, installation, or troubleshooting."
         )
         payload = {"text": oos_text, "out_of_scope": True}
+        log_event(log, "chat.scope.rejected", active=safe_preview(active))
         if req.stream:
             full = {"session_id": session_id, **payload}
 
             async def _oos_gen() -> AsyncIterator[bytes]:
                 record_exchange(session_id, message, oos_text, metadata={"out_of_scope": True})
+                log_event(log, "chat.response.done", **_payload_metadata(full))
                 yield sse_done(full)
 
             return _sse_response(_oos_gen())
@@ -249,6 +299,17 @@ async def _chat_inner(req: ChatRequest, rid: str, trace) -> dict[str, Any] | Str
     )
 
     log.info("req=%s intent=%s part_query=%r ps=%r", rid, intent.value, part_query, ps)
+    log_event(
+        log,
+        "intent.classified",
+        intent=intent.value,
+        browse_all=classification.browse_all_parts,
+        part_query=catalog_filter,
+        ps_number=ps,
+        catalog_scope=catalog_scope.value,
+        model=appliance_model or "",
+    )
+    log_event(log, "chat.branch.selected", branch=intent.value)
 
     if intent == Intent.GREETING:
         greet = (
