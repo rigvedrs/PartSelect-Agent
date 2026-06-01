@@ -7,7 +7,7 @@ function App() {
     <div className="app-page">
       <div className="app-hero">
         <h1>PartSelect</h1>
-        <p>Refrigerator &amp; Dishwasher Parts</p>
+        <p>AI Assistant for PartSelect</p>
       </div>
       <ChatWidget />
     </div>
