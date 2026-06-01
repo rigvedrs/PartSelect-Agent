@@ -1,6 +1,6 @@
 # PartSelect AI Chat Agent
 
-Visual demo-ready AI assistant for PartSelect-style appliance part shopping. It helps customers find refrigerator and dishwasher parts, verify compatibility, read installation guidance, troubleshoot symptoms, and manage a session cart from a compact embeddable chat widget.
+AI assistant for PartSelect-style appliance part shopping. It helps customers find refrigerator and dishwasher parts, verify compatibility, read installation guidance, troubleshoot symptoms, and manage a session cart from a compact embeddable chat widget.
 
 ![PartSelect app home](docs/assets/partselect-home.png)
 
@@ -41,7 +41,7 @@ flowchart LR
     API --> W
 ```
 
-The architecture is deterministic-first. Demo-critical flows such as install, compatibility, catalog lookup, and cart updates use direct handlers instead of depending on an agent to choose the right tool. LLMs are used where they add value: fast structured intent classification and natural-language troubleshooting synthesis.
+The architecture is deterministic-first. Critical flows such as install, compatibility, catalog lookup, and cart updates use direct handlers instead of depending on an agent to choose the right tool. LLMs are used where they add value: fast structured intent classification and natural-language troubleshooting synthesis.
 
 ## Data flow
 
@@ -68,13 +68,13 @@ cp .env.example .env
 
 docker compose up -d
 
-# Open the demo app:
+# Open the test app:
 open http://localhost:3000
 ```
 
-The repo ships with curated raw data in `backend/data/raw/`, so reviewers can run a meaningful demo without running the full scraper. First startup ingests the JSONL into Postgres and builds local MiniLM embeddings.
+The repo ships with curated raw data in `backend/data/raw/`, so reviewers can run a meaningful test without running the full scraper. First startup ingests the JSONL into Postgres and builds local MiniLM embeddings.
 
-## Good demo queries
+## Good test queries
 
 ```text
 Show parts for WDT780SAEM1
@@ -106,7 +106,7 @@ partselect-agent/
 ├── frontend/             # React embeddable chat widget
 ├── docs/
 │   ├── DETAILED_README.md
-│   ├── demo/
+│   ├── test/
 │   └── assets/
 ├── config.toml           # LLM, catalog, retrieval, live scrape settings
 └── docker-compose.yml
@@ -115,5 +115,5 @@ partselect-agent/
 ## More detail
 
 - [Detailed implementation README](docs/DETAILED_README.md)
-- [Quick demo deck](docs/demo/PartSelect_AI_Chat_Agent_Demo.pptx)
+- [Quick test deck](docs/test/PartSelect_AI_Chat_Agent_Demo.pptx)
 
