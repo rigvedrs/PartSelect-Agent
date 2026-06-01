@@ -146,10 +146,7 @@ def log_event(logger: logging.Logger, event: str, **fields: Any) -> None:
         field_text = _format_fields(safe)
         message = f"{event} {field_text}".strip()
         component = logger.name if isinstance(logger, logging.Logger) else "app"
-        _loguru_logger.bind(component=component, event=event, **safe).log(
-            logging.getLevelName(logger.getEffectiveLevel()) if isinstance(logger, logging.Logger) else "INFO",
-            message,
-        )
+        _loguru_logger.bind(component=component, event=event, **safe).info(message)
     except Exception:
         try:
             logger.info("%s", event)
